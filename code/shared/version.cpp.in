@@ -1,0 +1,10 @@
+#define KCDC_GIT_VERSION_LONG "@KCDC_GIT_VERSION_LONG@"
+#define KCDC_GIT_VERSION "@KCDC_GIT_VERSION@"
+#define KCDC_VERSION      "@KCDC_VERSION@"
+
+
+namespace KCDC::Shared::Version {
+    const char *git = KCDC_GIT_VERSION;
+    const char *gitLong = KCDC_GIT_VERSION_LONG;
+    const char *rel = KCDC_VERSION;
+};

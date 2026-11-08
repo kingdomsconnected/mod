@@ -1,0 +1,48 @@
+MafiaHub source-available license
+Copyright (c) 2026 MafiaHub. All rights reserved.
+
+This license applies to Kingdoms Connected (KCDC). The original work is maintained at
+https://github.com/KingdomsConnected/mod.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the
+following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following
+disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following
+disclaimer in the documentation and/or other materials provided with the distribution.
+3. All advertising materials mentioning features or use of this software must display the following acknowledgement:
+This product includes software developed by MafiaHub.
+4. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products
+derived from this software without specific prior written permission.
+5. Except as permitted by clause 8, source code may be copied, forked, studied, modified and built only with the intent
+to contribute to the original work.
+Forks and development builds may be used and shared only for developing, reviewing and testing contributions intended
+for the original repository. This permission does not allow their use to operate a separate multiplayer platform or to
+provide a client or server for a public or private community.
+6. Playing and hosting community servers is permitted using unmodified official binary releases published by MafiaHub
+for Kingdoms Connected. Outside the contribution work permitted by clause 5, clients and servers must use those official
+releases. This restriction also applies to binaries built from unmodified source. Contributions become available for
+community use when included in an official release.
+7. Building, distributing or operating a custom or alternative launcher for this software is not permitted without
+specific prior written permission. Changes to the official launcher are permitted only for contribution development,
+review and testing under clause 5, and may not be deployed as a separate launcher for a community or platform.
+8. The scripting API declarations and example resources may be used, modified and redistributed to develop and run
+scripts, game modes and resources with official Kingdoms Connected client and server releases. This permission does not
+extend to modified or source-built clients and servers or custom launchers. Conditions 1 through 4 continue to apply to
+copies and modifications of the declarations and example resources.
+
+Any use outside these permissions requires specific prior written permission from MafiaHub.
+
+For MafiaHub Framework components included in Kingdoms Connected, MafiaHub grants the uses expressly permitted above
+as specific written permission under clause 5 of the Framework license. All other conditions of that license remain in
+force. Third-party components remain subject to their own licenses; this license does not replace or restrict the rights
+granted by those licenses. See NOTICE.txt and the notices accompanying those components.
+
+THIS SOFTWARE IS PROVIDED BY COPYRIGHT HOLDER "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL
+COPYRIGHT HOLDER BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.

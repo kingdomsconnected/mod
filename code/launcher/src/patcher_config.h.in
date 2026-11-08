@@ -1,0 +1,11 @@
+#pragma once
+
+#include <cstddef>
+
+namespace KCDC::LauncherPatcherConfig {
+    inline constexpr bool Enabled = @KCDC_PATCHER_ENABLED_CPP@;
+    inline constexpr const char *ApiUrl = R"kcdcpatchercfg(@KCDC_PATCHER_API_URL@)kcdcpatchercfg";
+    inline constexpr const char *ModId = R"kcdcpatchercfg(@KCDC_PATCHER_MOD_ID@)kcdcpatchercfg";
+    inline constexpr const char *DownloadToken = R"kcdcpatchercfg(@KCDC_PATCHER_DOWNLOAD_TOKEN@)kcdcpatchercfg";
+    inline constexpr std::size_t DownloadConcurrency = @KCDC_PATCHER_DOWNLOAD_CONCURRENCY@;
+} // namespace KCDC::LauncherPatcherConfig

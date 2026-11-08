@@ -1,0 +1,44 @@
+# Deploy a released image: fly deploy -c deploy/fly.toml --image ghcr.io/kingdomsconnected/kcdc-server:<version>
+# UDP requires a dedicated IPv4: fly ips allocate-v4
+
+app = 'kcdc-server'
+primary_region = 'ams'
+
+# Resolve the Fly.io UDP bind address and pass it as a native server argument.
+[processes]
+  app = """/bin/sh -c 'exec /usr/local/bin/kcdc-entrypoint --host "$(getent ahostsv4 fly-global-services | head -n 1 | cut -d " " -f 1)"'"""
+
+# Game session (MafiaNet over UDP; the HTTP endpoints share the port number over TCP, below)
+[[services]]
+  internal_port = 27015
+  protocol = 'udp'
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+  processes = ['app']
+
+  [[services.ports]]
+    port = 27015
+
+# HTTP endpoints (TCP on the game port)
+[[services]]
+  internal_port = 27015
+  protocol = 'tcp'
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+  processes = ['app']
+
+  [[services.ports]]
+    port = 27015
+
+  [[services.tcp_checks]]
+    grace_period = '30s'
+    interval = '15s'
+    timeout = '5s'
+
+[[vm]]
+  memory = '4gb'
+  cpu_kind = 'performance'
+  cpus = 2
+  memory_mb = 4096

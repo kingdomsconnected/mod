@@ -1,0 +1,106 @@
+#pragma once
+
+#include <utils/streamed_assets/policy.h>
+
+#include <memory>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace KCDC::Shared::StreamedAssets {
+    // The two lanes a resource streams through.
+    //
+    // `stream` carries new assets. Every entry sits at `<category>/kcdc/<resource>/...`, which the
+    // game ships nothing under, so nothing in such a pak can shadow a game file. Three engine folders
+    // with fixed roots are the exceptions, each still namespaced by a `kcdc_<resource>_` file prefix:
+    // FMOD banks (`sounds/fmod/build/pc/`), whose loader takes names relative to that folder, and
+    // particle libraries (`libs/particles/`), which FindEffect loads by library name.
+    //
+    // `replace` carries overrides of stock paths and is mounted with FLAGS_OVERRIDE_PAK so it also
+    // wins over the level's own paks. It is where a KCD2 mod's data paks go, extracted: its assets,
+    // and its database table patches (`libs/tables/.../<table>__<id>.xml`).
+    //
+    // `localization` carries a KCD2 mod's string patches, `<language>/<file>__<id>.xml`, mounted
+    // under the game's localization folder and merged into the string table like the game merges an
+    // installed mod's.
+    inline constexpr char kLaneStream[]       = "stream";
+    inline constexpr char kLaneReplace[]      = "replace";
+    inline constexpr char kLaneLocalization[] = "localization";
+
+    // The folder segment that sandboxes the stream lane.
+    inline constexpr std::string_view kNamespaceSegment = "kcdc";
+
+    // The Mannequin fragment every streamed clip plays through. The client declares it in the human
+    // animation files as they load, one option per clip the level's database was built with.
+    inline constexpr char kStreamedClipFragment[] = "KCDC_StreamedClip";
+
+    /**
+     * KCDC's statement of what a streamed pak may carry, applied by the server when it builds one and
+     * by the client before it mounts one.
+     */
+    class Policy final: public Framework::Utils::StreamedAssets::Policy {
+      public:
+        static const std::shared_ptr<const Policy> &Get();
+
+        const std::vector<std::string> &GetLanes() const override;
+
+        /**
+         * Normalises an entry path (lowercase, `/`) and checks it against the lane. Every directory
+         * segment must be free of dots: CMatMan keys a material by its name cut at the first dot.
+         */
+        bool NormalizeEntry(std::string_view lane, std::string_view resource, std::string_view raw, std::string &out, std::string &reason) const override;
+
+        /** Already-compressed and streamed kinds are stored; the rest is deflated. */
+        bool PrefersStore(std::string_view normalized) const override;
+
+        static bool IsAnimationClip(std::string_view normalized);
+        static bool IsAnimationDatabase(std::string_view normalized);
+        static bool IsTextureBase(std::string_view normalized);
+        static bool IsMaterial(std::string_view normalized);
+        static bool IsStaticMesh(std::string_view normalized);
+
+        /** An ATL controls file: `sounds/kcdc/<resource>/atl/<name>.xml`. */
+        static bool IsAudioControls(std::string_view normalized);
+
+        /** An FMOD bank: `sounds/fmod/build/pc/kcdc_<resource>_<name>[.strings|.assets|.streams].bank`. */
+        static bool IsFmodBank(std::string_view normalized);
+
+        /** A particle library: `libs/particles/kcdc_<resource>_<name>.xml`. */
+        static bool IsParticleLibrary(std::string_view normalized);
+
+        /** A database table patch: `libs/tables/.../<table>__<id>.xml`, merged row by row into `<table>`. */
+        static bool IsTablePatch(std::string_view normalized);
+
+        /** A localization lane entry's language: `<language>/<file>__<id>.xml` answers `<language>`. */
+        static std::string_view LanguageOf(std::string_view normalized);
+
+        /** The stock string file a localization patch merges into: `<file>.xml`. */
+        static std::string PatchedFileOf(std::string_view normalized);
+
+        /**
+         * Whether a model path has the shape of a streamed static mesh: `objects/kcdc/<resource>/...cgf`.
+         * Only the shape -- whether a server actually streams it is the caller's check.
+         */
+        static bool IsStreamedModelPath(std::string_view path);
+
+        /** The same for a clip: `animations/kcdc/<resource>/...caf`. */
+        static bool IsStreamedClipPath(std::string_view path);
+
+        /**
+         * Whether a particle effect name has the shape of one out of a streamed library:
+         * `kcdc_<resource>_<library>.<rest>`, the library part lowercase. Effect names keep the
+         * case their library spells them in; only the library has to match a file.
+         */
+        static bool IsStreamedEffectName(std::string_view name);
+
+        /** The stream entry a streamed effect's library is: `libs/particles/<library>.xml`. */
+        static std::string ParticleLibraryEntryOf(std::string_view effectName);
+
+        /** The resource a stream-lane path belongs to, or empty. */
+        static std::string ResourceOf(std::string_view normalized);
+
+      private:
+        /** `<category>/kcdc/<resource>/...<extension>`, lowercase, with nothing that climbs out of it. */
+        static bool IsStreamedPath(std::string_view path, std::string_view category, std::string_view extension);
+    };
+} // namespace KCDC::Shared::StreamedAssets

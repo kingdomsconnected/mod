@@ -1,0 +1,7 @@
+# A resource's TypeScript toolchain and what it produces. The emit is built
+# rather than committed, so whatever runs is whatever the sources say; the
+# server build compiles it and .github/workflows/release.yml installs the
+# toolchain the release bundles need.
+node_modules/
+*.tsbuildinfo
+dist/

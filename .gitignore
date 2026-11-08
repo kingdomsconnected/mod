@@ -1,0 +1,7 @@
+# Scripting contract bundle: generated from scripting-api/, published by CI, never committed.
+/build/
+__pycache__/
+
+# Build trees, logs and the Framework SDK cache; only the build script is tracked.
+/builds/*
+!/builds/build.bat

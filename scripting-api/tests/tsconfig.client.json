@@ -1,0 +1,4 @@
+{
+  "extends": "../tsconfig.client.json",
+  "files": ["../shared.d.ts", "../generated/client-api.d.ts", "client-player-stats.ts", "client-inventory-use.ts", "client-player-visor.ts"]
+}

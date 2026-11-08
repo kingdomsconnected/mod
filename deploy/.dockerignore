@@ -1,0 +1,17 @@
+# Deny by default, even if somebody builds from the project checkout.
+**
+!Dockerfile
+!entrypoint.sh
+!egg-kcdc.json
+!runtime/
+!runtime/KCDCServer
+!runtime/crashpad_handler
+!runtime/libnode.so
+!runtime/libnode.so.[0-9]*
+!runtime/LICENSE.txt
+!runtime/NOTICE.txt
+!runtime/licenses/
+!runtime/licenses/Framework-LICENSE.txt
+# The default gamemode the entrypoint seeds; both lines are needed.
+!default-resources/
+!default-resources/**

@@ -1,0 +1,27 @@
+{
+  "//": "The client half, kept beside its own sources so an editor opening one finds the right program. Same options as the root config, against @kingdomsconnected/types/client instead of the server declarations -- including no `incremental`, for the reason given there.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "lib": ["ES2022"],
+
+    "rootDir": ".",
+    "outDir": "../../dist/client",
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "declaration": false,
+    "sourceMap": false,
+    "newLine": "lf",
+
+    "types": ["@kingdomsconnected/types/client"]
+  },
+  "include": ["**/*.ts"]
+}

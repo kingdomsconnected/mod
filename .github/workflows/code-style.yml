@@ -1,0 +1,35 @@
+name: Code style
+
+# Rules a reviewer should never have to spell out. Each check is a standalone
+# script so it runs the same way locally: python scripts/check_braces.py
+
+on:
+  pull_request:
+    paths:
+      - "code/**"
+      - "scripts/check_braces.py"
+      - ".github/workflows/code-style.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "code/**"
+      - "scripts/check_braces.py"
+      - ".github/workflows/code-style.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: code-style-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  braces:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Every control statement is braced
+        run: python3 scripts/check_braces.py

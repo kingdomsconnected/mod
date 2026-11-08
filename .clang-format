@@ -1,0 +1,5 @@
+# Inherits the Framework style; adds what Kingdoms Connected enforces on top.
+BasedOnStyle: InheritParentConfig
+# Every if/else/for/while body is a braced block, even a single statement.
+# scripts/check_braces.py is the CI gate for the same rule.
+InsertBraces: true

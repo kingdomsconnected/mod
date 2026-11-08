@@ -1,0 +1,71 @@
+:root {
+    /* Foundational palette. */
+    --color-ink: #211a14;
+    --color-ink-strong: #2c2017;
+    --color-ink-soft: #3d2d20;
+    --color-ink-muted: #6f6252;
+    --color-ink-subtle: #8c7d68;
+    --color-ink-faint: #a99d8d;
+    --color-parchment: #c9b48e;
+    --color-parchment-light: #dfcfad;
+    --color-parchment-deep: #b49b71;
+    --color-wine: #661d22;
+    --color-wine-dark: #341012;
+    --color-wine-light: #8d3438;
+    --color-gold: #c5a15b;
+    --color-gold-pale: #ead49a;
+    --color-ash: #b9afa0;
+    --color-ivory: #f6eddb;
+    --color-success: #3d673f;
+    --color-warning: #8b5b23;
+    --color-danger: #872c30;
+
+    /* Channels used when a component needs contextual opacity. */
+    --rgb-black: 0 0 0;
+    --rgb-night: 9 7 6;
+    --rgb-night-deep: 8 6 5;
+    --rgb-brown: 91 63 32;
+    --rgb-brown-soft: 75 53 31;
+    --rgb-shadow-brown: 83 55 24;
+    --rgb-wine: 102 29 34;
+    --rgb-gold: 216 187 126;
+    --rgb-gold-pale: 238 198 130;
+    --rgb-paper: 248 235 205;
+    --rgb-paper-light: 255 247 218;
+    --rgb-paper-deep: 207 185 143;
+    --rgb-white: 255 255 255;
+
+    /* Semantic typography roles. */
+    --text-scene: var(--color-ivory);
+    --text-scene-muted: var(--color-ash);
+    --text-paper: var(--color-ink);
+    --text-paper-strong: var(--color-ink-strong);
+    --text-paper-soft: var(--color-ink-soft);
+    --text-paper-muted: var(--color-ink-muted);
+    --text-paper-subtle: var(--color-ink-subtle);
+    --text-paper-faint: var(--color-ink-faint);
+    --text-accent: var(--color-wine);
+    --text-gilded: var(--color-gold-pale);
+
+    /* Reusable component roles. */
+    --border-paper: rgb(var(--rgb-brown-soft) / .3);
+    --border-paper-soft: rgb(var(--rgb-brown-soft) / .16);
+    --border-paper-strong: rgb(var(--rgb-brown) / .45);
+    --border-accent: rgb(var(--rgb-wine) / .35);
+    --surface-control: rgb(var(--rgb-paper) / .32);
+    --surface-control-hover: rgb(var(--rgb-paper) / .34);
+    --surface-control-focus: rgb(var(--rgb-paper-light) / .22);
+    --surface-accent-soft: rgb(var(--rgb-wine) / .1);
+    --focus-ring: rgb(var(--rgb-wine) / .72);
+    --button-primary-border: #8b4141;
+    --button-primary-start: #79272c;
+    --button-primary-end: #56171c;
+    --button-secondary-border: #66533a;
+    --button-secondary-start: #584833;
+    --button-secondary-end: #3c2d20;
+
+    /* Global typography and motion. */
+    --font-display: "Palatino Linotype", "Book Antiqua", Georgia, serif;
+    --motion-fast: .16s;
+    --motion-standard: .2s;
+}

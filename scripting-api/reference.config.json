@@ -1,0 +1,24 @@
+{
+  "targets": {
+    "server": {
+      "label": "Server API",
+      "tsconfig": "tsconfig.server.json",
+      "additionalDeclarations": ["shared.d.ts"],
+      "metadataFile": "generated/server-api.json",
+      "generatedEntryPoint": "generated/server-api.d.ts",
+      "typeImports": { "../shared.js": ["EventHandler", "MessageHandler", "MessageReply", "Quaternion", "Unsubscribe", "Vector3"] },
+      "bindingSources": ["../code/server/src/core/scripting", "../code/server/src/features"],
+      "description": "Authoritative Node.js APIs for game modes, players, horses, and replicated entities."
+    },
+    "client": {
+      "label": "Client API",
+      "tsconfig": "tsconfig.client.json",
+      "additionalDeclarations": ["shared.d.ts"],
+      "metadataFile": "generated/client-api.json",
+      "generatedEntryPoint": "generated/client-api.d.ts",
+      "typeImports": { "../shared.js": ["ActionHintHandler", "Color", "EventHandler", "KeyHandler", "MessageHandler", "MessageReply", "NativeClipHandler", "NativeElementHandler", "NativeScreenHandler", "PlacementHandler", "Quaternion", "Unsubscribe", "Vector2", "Vector3", "WebEventHandler"] },
+      "bindingSources": ["../code/client/src/core/scripting", "../code/client/src/features"],
+      "description": "Sandboxed V8 APIs for reading the local player and the bodies this client can see."
+    }
+  }
+}

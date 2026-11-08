@@ -1,0 +1,23 @@
+{
+  "name": "kcdc-playground",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Optional development playground for the sample game mode",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && tsc -p src/client/tsconfig.json",
+    "test": "npm run build && node --test tests/*.test.cjs"
+  },
+  "devDependencies": {
+    "@kingdomsconnected/types": "file:../../../scripting-api",
+    "typescript": "^5.9.2"
+  },
+  "mafiahub": {
+    "category": "example",
+    "resourceDependencies": ["kcdc-gamemode"],
+    "serverScripts": ["dist/server/index.js"],
+    "clientScripts": ["dist/client/index.js"],
+    "files": ["dist/client/**", "ui/**"],
+    "priority": 20
+  }
+}

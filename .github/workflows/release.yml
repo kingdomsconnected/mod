@@ -1,0 +1,1490 @@
+name: Release
+
+# Releases are cut by tag. A push to the default branch does not publish a
+# release. The tag records which commit is released.
+#
+#   git tag v1.2.0-rc.1  ->  build, publish to `testing`, stamp `testing`, GitHub prerelease
+#   git tag v1.2.0       ->  publish to `testing`, stamp `stable`, GitHub release
+#
+# Both tags upload to `testing`; they differ in the channel stamped into the
+# archive, which is the one the launcher patches from. A final tag's archive is
+# what stable serves once promoted, so it carries `stable` from the start.
+#
+# Stable is advanced manually in MafiaHub Services. That promotion moves the
+# matching build and documentation contract together, so nothing in this file
+# ever targets it. Nexus Mods follows stable, so it is pushed by nexus.yml,
+# dispatched by hand after the promotion.
+#
+# A final tag on a commit that already has a successful prerelease run
+# **promotes** that run's artifacts instead of rebuilding them: the bits testers
+# ran are the bits that ship. When no reusable run exists -- artifacts expired,
+# or the final tag sits on a commit that was never pre-released -- the release is
+# built from scratch and the log says so.
+#
+# The tag must match the VERSION file (its release core, ignoring any prerelease
+# suffix) or the run fails before building anything. That is the whole
+# enforcement behind manual version bumping.
+#
+# The Framework is a prebuilt SDK release, pinned by version and archive SHA-256
+# in cmake/FrameworkPin.cmake, so a tagged release records exactly which one it
+# contains. KCDC is configured on its own; the Framework source is checked out
+# only for the framework_ref override.
+#
+# The tested Linux server is repackaged as the public GHCR image once the
+# release is published; nothing is compiled there. See docs/server-container.md.
+#
+# The scripting declarations are published to npm as @kingdomsconnected/types at
+# the release version (a prerelease under the `next` dist-tag), and the gamemode
+# shipped in each bundle depends on that exact version: `npm ci` inside it
+# brings the declarations, and nobody fetches them by hand. npm versions are
+# immutable, so the publish is the very last step, once every build, upload and
+# image has succeeded: a release that fails anywhere before it leaves the version
+# free to be tagged again. The tarball is packed first and its integrity handed
+# to the build jobs, which write the bundled gamemode's lockfile from it; the
+# publish at the end uploads that same file.
+#
+# Required repository secrets:
+#   KCDC_BUILD_UPLOAD_TOKEN   - MafiaHub build upload token, for publishing the
+#                               client bundle and the release archive.
+#   KCDC_BUILD_DOWNLOAD_TOKEN - MafiaHub build download token, compiled into the
+#                               launcher so it can patch an installation.
+#   SENTRY_AUTH_TOKEN         - Optional. Only used when SENTRY_ORG and
+#                               SENTRY_PROJECT are also set; the step is skipped
+#                               otherwise, so the build still succeeds.
+#   KCDC_RPC_SALT_KEY         - HMAC key the RPC identifier salt is derived
+#                               from, per tag. Rotating it re-keys every
+#                               release built after the rotation. See the
+#                               salt steps in the two build jobs.
+#   NPM_TOKEN                 - Optional. An npm token allowed to publish
+#                               @kingdomsconnected/types. Without it the publish
+#                               authenticates through npm trusted publishing,
+#                               which needs this repository and release.yml
+#                               registered as the package's trusted publisher.
+#
+# Required repository variables:
+#   KCDC_SERVICES_API_URL          - MafiaHub API base URL.
+#   KCDC_SERVICES_MOD_ID           - MafiaHub mods.id UUID for KCDC.
+#   MAFIAHUB_SERVICES_CLI_VERSION  - Optional pin; falls back to
+#                                    scripting-api/services-cli.version.
+#   SENTRY_ORG / SENTRY_PROJECT    - Optional, as a variable or a secret. Name the Sentry project the client
+#                                    PDBs and the Linux server's DWARF are
+#                                    uploaded to; without them the upload steps
+#                                    skip. The PDBs are also kept as a CI
+#                                    artifact for a week, which is what a
+#                                    minidump needs.
+#   VCPKG_BINARY_SOURCES           - Optional. A vcpkg binary cache shared across
+#                                    tags and projects; falls back to the
+#                                    Actions cache, which a tag run can barely
+#                                    use. See the env block below.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      framework_ref:
+        description: "Framework branch/tag/SHA to build from source, overriding cmake/FrameworkPin.cmake. Testing only - forces a rebuild and disables promotion."
+        required: false
+        default: ""
+
+# One release at a time per tag, and never cancelled in flight: a half-published
+# release leaves the services channel and the GitHub release disagreeing about
+# what shipped.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # vcpkg binary cache. Without one a cold runner rebuilds openssl, curl and
+  # sentry-native from source before a single KCDC file compiles. x-gha is only
+  # a fallback and buys little on its own: this workflow runs on tags, and
+  # GitHub scopes cache entries per ref, so a tag run can only read what the
+  # default branch wrote. Point the VCPKG_BINARY_SOURCES repository variable at
+  # an S3/R2 or NuGet store to get a cache that is actually shared across tags,
+  # architectures and projects.
+  VCPKG_BINARY_SOURCES: ${{ vars.VCPKG_BINARY_SOURCES || 'clear;x-gha,readwrite' }}
+
+# The org's self-hosted fleet is Windows only, so the two MSVC builds are the
+# only jobs that leave GitHub's hosted runners. Everything Linux -- plan, the
+# Linux server, package & publish and the public image -- stays hosted, both
+# because nothing could claim a Linux label and because the image has to come
+# off a known base rather than whatever the self-hosted box has accumulated.
+jobs:
+  # ---------------------------------------------------------------------------
+  # Resolve the release identity, enforce the tag/VERSION agreement, and decide
+  # whether this run builds or promotes. Everything downstream reads these
+  # outputs; nothing downstream re-derives them.
+  # ---------------------------------------------------------------------------
+  plan:
+    name: Plan release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      channel: ${{ steps.identity.outputs.channel }}
+      install_channel: ${{ steps.identity.outputs.install_channel }}
+      prerelease: ${{ steps.identity.outputs.prerelease }}
+      name: ${{ steps.identity.outputs.name }}
+      framework_ref: ${{ steps.framework.outputs.ref }}
+      framework_label: ${{ steps.framework.outputs.label }}
+      promote_run_id: ${{ steps.promote.outputs.run_id }}
+    steps:
+      - name: Checkout KCDC
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release identity
+        id: identity
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::This workflow only runs on a tag. Dispatch it with the tag selected as the ref."
+            exit 1
+          fi
+
+          TAG="${GITHUB_REF_NAME}"
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag '${TAG}' is not a release tag. Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-prerelease."
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          CORE="${VERSION%%-*}"
+
+          FILE_VERSION="$(tr -d ' \t\r\n' < VERSION)"
+          if [ "$FILE_VERSION" != "$CORE" ]; then
+            echo "::error::VERSION file says '${FILE_VERSION}' but tag '${TAG}' means '${CORE}'. Bump VERSION in the commit being tagged, then retag."
+            exit 1
+          fi
+
+          if [ "$VERSION" = "$CORE" ]; then
+            PRERELEASE=false
+          else
+            PRERELEASE=true
+          fi
+
+          # Two channels, because they answer different questions.
+          #
+          # CHANNEL is where this run uploads. Always `testing`: stable is
+          # advanced by hand in MafiaHub Services so the build and the
+          # documentation contract move together, and nothing here may target
+          # it.
+          #
+          # INSTALL_CHANNEL is what the archive is stamped with, which is the
+          # channel the launcher patches from for the life of the installation.
+          # It has to name where the archive ends up for players, not where CI
+          # put it: a final tag's archive is what stable serves once promoted,
+          # so stamping it `testing` pins every stable install to testing
+          # forever. Services serves a promoted build under the channel that
+          # was asked for, so the stamp is the only thing that has to be right
+          # up front.
+          CHANNEL=testing
+          if [ "$PRERELEASE" = "true" ]; then
+            INSTALL_CHANNEL=testing
+          else
+            INSTALL_CHANNEL=stable
+          fi
+
+          {
+            echo "version=${VERSION}"
+            echo "channel=${CHANNEL}"
+            echo "install_channel=${INSTALL_CHANNEL}"
+            echo "prerelease=${PRERELEASE}"
+            echo "name=KCDC-${VERSION}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing ${TAG} as ${VERSION}: uploading to ${CHANNEL}, stamped for ${INSTALL_CHANNEL} (prerelease=${PRERELEASE})"
+
+      - name: Resolve Framework pin
+        id: framework
+        env:
+          OVERRIDE: ${{ github.event.inputs.framework_ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "${OVERRIDE}" ]; then
+            echo "::warning::Building against Framework source '${OVERRIDE}' instead of cmake/FrameworkPin.cmake. This release is not reproducible from the tag alone."
+            {
+              echo "ref=${OVERRIDE}"
+              echo "label=source ${OVERRIDE}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Read here only to fail fast and to label the release; the build jobs take
+          # the pin through FrameworkBootstrap.cmake, which re-checks every archive hash.
+          PIN=cmake/FrameworkPin.cmake
+          if [ ! -f "$PIN" ]; then
+            echo "::error::${PIN} is missing; a tagged release must record which Framework it was built against."
+            exit 1
+          fi
+          VALUE() { sed -nE "s/^[[:space:]]*set\($1[[:space:]]+\"([^\"]*)\"\).*/\1/p" "$PIN" | head -1; }
+          FW_VERSION="$(VALUE FRAMEWORK_PIN_VERSION)"
+          if ! printf '%s' "$FW_VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::${PIN} must set FRAMEWORK_PIN_VERSION to MAJOR.MINOR.PATCH, got '${FW_VERSION}'."
+            exit 1
+          fi
+          for PLATFORM in windows linux; do
+            HASH="$(VALUE "FRAMEWORK_PIN_SHA256_${PLATFORM}")"
+            if ! printf '%s' "$HASH" | grep -Eq '^[0-9a-f]{64}$'; then
+              echo "::error::${PIN} must set FRAMEWORK_PIN_SHA256_${PLATFORM} to the archive's SHA-256, got '${HASH}'."
+              exit 1
+            fi
+          done
+          {
+            echo "ref="
+            echo "label=v${FW_VERSION}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Framework SDK pinned at ${FW_VERSION}"
+
+      # A final release reuses the prerelease run that built this exact commit, so
+      # the promoted bundle is byte-identical to the one that was tested. Skipped
+      # for prereleases (nothing to promote from yet) and for Framework overrides
+      # (the override changes the inputs, so the earlier artifacts are not it).
+      - name: Look for a build to promote
+        id: promote
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ steps.identity.outputs.prerelease }}
+          OVERRIDE: ${{ github.event.inputs.framework_ref }}
+        run: |
+          set -euo pipefail
+          PROMOTE=""
+
+          if [ "${PRERELEASE}" = "true" ] || [ -n "${OVERRIDE}" ]; then
+            echo "Building from source (prerelease or Framework override)."
+          else
+            API_GET() { curl -fsS -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json" "$1"; }
+            RUNS="$(API_GET "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/release.yml/runs?head_sha=${GITHUB_SHA}&status=success&per_page=20" || echo '{}')"
+
+            for RUN_ID in $(jq -r '.workflow_runs[]?.id // empty' <<<"$RUNS"); do
+              if [ "$RUN_ID" = "${GITHUB_RUN_ID}" ]; then
+                continue
+              fi
+              ARTIFACTS="$(API_GET "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/artifacts?per_page=100" || echo '{}')"
+              if jq -e '[.artifacts[]? | select(.expired == false) | .name] | (index("client") != null) and (index("server") != null) and (index("server-linux") != null)' <<<"$ARTIFACTS" >/dev/null; then
+                PROMOTE="${RUN_ID}"
+                break
+              fi
+            done
+
+            if [ -n "${PROMOTE}" ]; then
+              echo "Promoting artifacts from run ${PROMOTE} - these are the bits that were tested."
+            else
+              echo "::warning::No reusable prerelease build for ${GITHUB_SHA}; building this release from source. It has not been through the testing channel in this exact form."
+            fi
+          fi
+
+          echo "run_id=${PROMOTE}" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # Windows: one configure, one build, two bundles.
+  #
+  # Client: KCDCClient.dll + KCDCLauncher.exe + cef_subprocess.exe, and the
+  # runtime the Framework stages into bin/ beside them. Kingdom Come:
+  # Deliverance II is x64 only, and
+  # code/CMakeLists.txt gates the client and launcher on CMAKE_CL_64.
+  #
+  # Server: KCDCServer.exe + libnode.dll + crashpad_handler.exe, plus
+  # resources/ next to the binary, synced there by KCDCResources. Every `/`
+  # command lives in a resource, so a bundle without them answers nothing --
+  # which the sanity check below turns into a build failure.
+  #
+  # Both link the same Framework, vendors and vcpkg tree, so building them in
+  # separate jobs configured and compiled all of it twice. They share bin/, and
+  # each bundle is cut out of it below.
+  # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # @kingdomsconnected/types: the committed declarations as an npm package, at
+  # the release version, packed here and published by `publish-types` at the
+  # very end. The build jobs wait for the integrity, which is all the bundled
+  # gamemode's lockfile needs. A rerun of a version that is already published
+  # packs nothing: it takes the published tarball, so the integrity every bundle
+  # locks is the one npm serves.
+  # ---------------------------------------------------------------------------
+  pack-types:
+    name: Pack @kingdomsconnected/types
+    needs: plan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      integrity: ${{ steps.pack.outputs.integrity }}
+      published: ${{ steps.pack.outputs.published }}
+    env:
+      MAFIAHUB_SERVICES_CLI_VERSION: ${{ vars.MAFIAHUB_SERVICES_CLI_VERSION }}
+    steps:
+      - name: Checkout KCDC
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.4.1 --activate
+
+      # The package carries the committed declarations, so they must be the ones
+      # the committed metadata generates -- the same check the contract publish runs.
+      - name: Check the committed declarations
+        run: |
+          set -euo pipefail
+          node scripts/build_scripting_contract.mjs --out build/scripting-contract
+          if ! git diff --quiet -- scripting-api/generated; then
+            echo "::error::The committed declarations do not match the committed metadata. Run scripts/build_scripting_contract.mjs and commit scripting-api/generated."
+            git --no-pager diff --stat -- scripting-api/generated
+            exit 1
+          fi
+
+      - name: Test package notices
+        run: python3 -m unittest discover -s scripts -p test_types_package.py -v
+
+      - name: Pack the package
+        id: pack
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/types-tarball
+          PUBLISHED=false
+          if npm view "@kingdomsconnected/types@${VERSION}" version >/dev/null 2>&1; then
+            echo "@kingdomsconnected/types@${VERSION} is already published; taking its tarball rather than packing a new one."
+            PUBLISHED=true
+            npm pack "@kingdomsconnected/types@${VERSION}" --json --pack-destination build/types-tarball > pack.json
+          else
+            node scripts/build_types_package.mjs --out build/types-package --version "${VERSION}"
+            npm pack ./build/types-package --json --pack-destination build/types-tarball > pack.json
+          fi
+          INTEGRITY="$(jq -re '.[0].integrity' pack.json)"
+          FILE="build/types-tarball/$(jq -re '.[0].filename' pack.json)"
+          for notice in LICENSE.txt NOTICE.txt; do
+            if ! tar -xOf "$FILE" "package/$notice" | cmp -s "$notice" -; then
+              echo "::error::The types tarball is missing the release's $notice."
+              exit 1
+            fi
+          done
+          # What npm will check the downloaded tarball against, computed from the
+          # file itself rather than trusted from npm's report.
+          ACTUAL="sha512-$(openssl dgst -sha512 -binary "${FILE}" | base64 -w0)"
+          if [ "${ACTUAL}" != "${INTEGRITY}" ]; then
+            echo "::error::npm reported ${INTEGRITY} for ${FILE}, but the file hashes to ${ACTUAL}."
+            exit 1
+          fi
+          echo "Packed ${FILE} (${INTEGRITY})"
+          {
+            echo "integrity=${INTEGRITY}"
+            echo "published=${PUBLISHED}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the tarball
+        uses: actions/upload-artifact@v4
+        with:
+          name: types-package
+          path: build/types-tarball/*.tgz
+          retention-days: 1
+          if-no-files-found: error
+
+  build-windows:
+    name: Windows (client + server, 64-bit)
+    needs: [plan, pack-types]
+    if: needs.plan.outputs.promote_run_id == ''
+    runs-on: [self-hosted, Windows, X64]
+    # Job scope so the symbol steps can guard on it: the secrets context is not
+    # available in a step-level `if`, and an unset token must skip, not fail.
+    env:
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG || secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT || secrets.SENTRY_PROJECT }}
+    steps:
+      - name: Checkout KCDC
+        uses: actions/checkout@v5
+
+      # Only for the framework_ref override: the Framework built from source as a
+      # subdirectory (FW_SOURCE_DIR) instead of the pinned SDK archive.
+      - name: Checkout Framework source (override only)
+        if: needs.plan.outputs.framework_ref != ''
+        uses: actions/checkout@v5
+        with:
+          repository: MafiaHub/Framework
+          ref: ${{ needs.plan.outputs.framework_ref }}
+          path: framework-src
+          submodules: false
+
+      - name: Set up CMake + Ninja
+        uses: lukka/get-cmake@latest
+        with:
+          useLocalCache: true
+          useCloudCache: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Set up MSVC (amd64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
+
+      # The pinned Framework SDK archive and the vcpkg checkout it resolves its ports
+      # with live outside the workspace, so git clean does not throw them away.
+      # FrameworkBootstrap locks the directory while it extracts.
+      - name: Point the Framework SDK cache at the runner
+        shell: powershell
+        run: |
+          $store = Join-Path $env:RUNNER_TOOL_CACHE 'kcdc-ci\framework-sdk'
+          New-Item -ItemType Directory -Force -Path $store | Out-Null
+          "FW_SDK_CACHE_DIR=$store" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Framework SDK cache: $store"
+
+      # Fail-soft: on any error `launcher` stays empty, CMake reads that as no
+      # launcher and the release builds uncached rather than failing.
+      - name: Set up sccache
+        id: sccache
+        shell: powershell
+        env:
+          SCCACHE_VERSION: 0.17.0
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $launcher = ''
+          try {
+            $ver  = $env:SCCACHE_VERSION
+            $root = Join-Path $env:RUNNER_TOOL_CACHE "kcdc-ci\sccache\$ver"
+            $exe  = Join-Path $root 'sccache.exe'
+            if (-not (Test-Path $exe)) {
+              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+              $pkg = "sccache-v${ver}-x86_64-pc-windows-msvc"
+              $zip = Join-Path $env:RUNNER_TEMP "$pkg.zip"
+              $tmp = Join-Path $env:RUNNER_TEMP $pkg
+              Invoke-WebRequest -UseBasicParsing -OutFile $zip `
+                -Uri "https://github.com/mozilla/sccache/releases/download/v${ver}/${pkg}.zip"
+              Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
+              $found = Get-ChildItem $tmp -Recurse -Filter sccache.exe | Select-Object -First 1
+              if (-not $found) { throw "sccache.exe not found in ${pkg}.zip" }
+              New-Item -ItemType Directory -Force -Path $root | Out-Null
+              Copy-Item $found.FullName $exe -Force
+              Remove-Item $zip, $tmp -Recurse -Force
+            }
+            $store = Join-Path $env:RUNNER_TOOL_CACHE 'kcdc-ci\sccache-store'
+            New-Item -ItemType Directory -Force -Path $store | Out-Null
+            $env:SCCACHE_DIR = $store
+            $env:SCCACHE_CACHE_SIZE = '20G'
+            $env:SCCACHE_IDLE_TIMEOUT = '0'
+            # A server left by an earlier job keeps the SCCACHE_DIR it started
+            # with, so restart it. Exits non-zero when none is running; no check.
+            # Never redirect a native command's stderr under EAP=Stop: PowerShell
+            # raises NativeCommandError even on a clean exit.
+            & $exe --stop-server | Out-Null
+            # Only --start-server reports a server that failed to come up.
+            # --show-stats prints zeroed stats and exits 0 with no server at all.
+            & $exe --start-server
+            if ($LASTEXITCODE -ne 0) { throw "sccache --start-server failed with $LASTEXITCODE" }
+            $root                    | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+            "SCCACHE_DIR=$store"     | Out-File -FilePath $env:GITHUB_ENV  -Append -Encoding utf8
+            "SCCACHE_CACHE_SIZE=20G" | Out-File -FilePath $env:GITHUB_ENV  -Append -Encoding utf8
+            "SCCACHE_IDLE_TIMEOUT=0" | Out-File -FilePath $env:GITHUB_ENV  -Append -Encoding utf8
+            $launcher = 'sccache'
+            Write-Host "sccache $ver ready, cache at $store"
+          } catch {
+            Write-Host "::warning::sccache unavailable, building without a compiler cache: $_"
+          }
+          "launcher=$launcher" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          exit 0
+
+      # vcpkg's x-gha backend reads these two out of the environment; the runner
+      # does not export them to job steps on its own. Harmless when
+      # VCPKG_BINARY_SOURCES names another store - vcpkg just ignores them.
+      - name: Export the Actions cache tokens for vcpkg
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_RESULTS_URL', process.env.ACTIONS_RESULTS_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      # Embedded debug info (/Z7) + /DEBUG make the linker emit KCDCClient.pdb;
+      # without them Release produces no PDB at all and every native crash is
+      # raw addresses, which is the one thing a KCD2 minidump cannot be read
+      # without. It is selected through CMake's MSVC_DEBUG_INFORMATION_FORMAT
+      # abstraction rather than by putting /Zi in CMAKE_<LANG>_FLAGS_RELEASE,
+      # because CMake emits a per-target compile PDB (/Fd <target>.dir/<target>.pdb)
+      # for every library whenever it thinks the compiler writes one. /Z7 writes
+      # no PDB, so that path never appears and sccache - which treats /Fd as a
+      # declared compile output - stops dying with "failed to zip up compiler
+      # outputs". Under CMP0141 NEW with Embedded, CMake stops emitting /Fd,
+      # which is the configuration sccache documents.
+      #
+      # The policy MUST be spelled CMAKE_POLICY_DEFAULT_CMP0141 - there is no
+      # CMAKE_POLICY_CMP0141 variable, and CMake silently reports that spelling
+      # as "manually-specified variables were not used by the project" while the
+      # abstraction stays off. CMP0141 arrived in CMake 3.25 and our
+      # cmake_minimum_required is 3.20, so it is not NEW by default either: with
+      # the wrong spelling no /Z7 is emitted, objects carry no debug info, and
+      # /DEBUG still yields a PDB - just a public-symbols-only one that names
+      # functions and nothing else.
+      #
+      # /OPT:REF /OPT:ICF are restored explicitly because /DEBUG turns both off
+      # by default. Optimisation settings are untouched, so the code itself is
+      # unchanged.
+      #
+      # /PDBALTPATH:%_PDB% writes the bare filename into the PE's CodeView record
+      # instead of the absolute build path, which would otherwise leak the
+      # runner's workspace layout to every player. The record itself has to stay:
+      # a symbol server matches a dump to its PDB by debug-id, never by path.
+      #
+      # KCDC_PATCHER_CHANNEL is deliberately not passed: the launcher reads the
+      # channel out of `.mafiahub/channel`, which the package job stamps in for
+      # the channel the archive is served on, so the binaries stay identical
+      # whatever channel they ship on.
+      #
+      # One configure serves both sides because each KCDC option is read by one
+      # target only: KCDC_PATCHER_* by the launcher (code/launcher), and
+      # KCDC_STAGE_RESOURCE_SOURCES by KCDCResources (code/server).
+      # The RPC identifier salt keys FW_RPC_IDENTIFIER (Framework
+      # networking/rpc/rpc_identifier.h). Left unset, a release ships the
+      # Framework's public default and its whole identifier table can be
+      # recomputed by anyone with the source. It is HMAC-SHA256(tag) under
+      # KCDC_RPC_SALT_KEY, truncated to 64 bits: unpredictable without the key,
+      # yet derived identically here and in the Linux job, so client and both
+      # servers of one release agree without passing the value between jobs
+      # (GitHub drops masked job outputs). The build token folds in the salt
+      # fingerprint, so a mismatch would refuse every connection -- keep the
+      # two derivations byte-for-byte equivalent.
+      - name: Derive RPC identifier salt
+        shell: powershell
+        env:
+          RPC_SALT_KEY: ${{ secrets.KCDC_RPC_SALT_KEY }}
+        run: |
+          if (-not $env:RPC_SALT_KEY) { Write-Output "::error::KCDC_RPC_SALT_KEY is not set; refusing to ship the public default RPC identifier salt."; exit 1 }
+          $hmac = [System.Security.Cryptography.HMACSHA256]::new([System.Text.Encoding]::UTF8.GetBytes($env:RPC_SALT_KEY))
+          $digest = $hmac.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($env:GITHUB_REF_NAME))
+          $salt = '0x' + (($digest[0..7] | ForEach-Object { $_.ToString('x2') }) -join '')
+          Write-Output "::add-mask::$salt"
+          [System.IO.File]::AppendAllText($env:GITHUB_ENV, "KCDC_RPC_IDENTIFIER_SALT=$salt`n")
+
+      - name: Configure (Release, 64-bit)
+        shell: powershell
+        run: cmake -B build-windows -G Ninja -DCMAKE_BUILD_TYPE=Release -DKCDC_STAGE_RESOURCE_SOURCES=ON
+          -DFW_SOURCE_DIR="${{ needs.plan.outputs.framework_ref != '' && format('{0}/framework-src', github.workspace) || '' }}"
+          -DFW_RPC_IDENTIFIER_SALT="$env:KCDC_RPC_IDENTIFIER_SALT"
+          -DKCDC_REQUIRE_RPC_IDENTIFIER_SALT=ON
+          -DCMAKE_C_COMPILER_LAUNCHER="${{ steps.sccache.outputs.launcher }}"
+          -DCMAKE_CXX_COMPILER_LAUNCHER="${{ steps.sccache.outputs.launcher }}"
+          -DCMAKE_POLICY_DEFAULT_CMP0141=NEW
+          -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+          -DCMAKE_C_FLAGS_RELEASE="/O2 /Ob2 /DNDEBUG"
+          -DCMAKE_CXX_FLAGS_RELEASE="/O2 /Ob2 /DNDEBUG"
+          -DCMAKE_EXE_LINKER_FLAGS_RELEASE="/INCREMENTAL:NO /DEBUG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%"
+          -DCMAKE_SHARED_LINKER_FLAGS_RELEASE="/INCREMENTAL:NO /DEBUG /OPT:REF /OPT:ICF /PDBALTPATH:%_PDB%"
+          -DKCDC_PATCHER_ENABLED=ON
+          -DKCDC_PATCHER_API_URL="${{ vars.KCDC_SERVICES_API_URL }}"
+          -DKCDC_PATCHER_MOD_ID="${{ vars.KCDC_SERVICES_MOD_ID }}"
+          -DKCDC_PATCHER_DOWNLOAD_TOKEN="${{ secrets.KCDC_BUILD_DOWNLOAD_TOKEN }}"
+
+      # One invocation, so Ninja schedules the client and server graphs together
+      # instead of draining one before starting the other. The exit code is
+      # checked by hand: $ErrorActionPreference does not cover native executables.
+      # cef_subprocess.exe ships prebuilt in the Framework SDK and is staged next to
+      # the client by fw_stage_runtime(); it is no longer a target of this build.
+      - name: Build client, launcher and server
+        shell: powershell
+        run: |
+          cmake --build build-windows --target KCDCClient KCDCLauncher KCDCServer
+          if ($LASTEXITCODE -ne 0) { throw "Build failed" }
+
+      - name: sccache statistics
+        if: always() && steps.sccache.outputs.launcher != ''
+        shell: powershell
+        run: sccache --show-stats
+
+      # The required set is scripts/package_client.bat's, which is the project's
+      # own account of what a player needs to run the mod.
+      - name: Sanity-check client artifacts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $required = @(
+            'KCDCClient.dll','KCDCLauncher.exe','MafiaHubUpdater.exe','FrameworkLoaderData.dll','fw_steam_api64.dll',
+            # CEF 156 (Framework 40.2) renders through vk_swiftshader; it ships no libEGL or libGLESv2.
+            'cef_subprocess.exe','libcef.dll','chrome_elf.dll','vk_swiftshader.dll','vulkan-1.dll',
+            'icudtl.dat','v8_context_snapshot.bin','resources.pak','chrome_100_percent.pak','chrome_200_percent.pak',
+            'libnode.dll','discord_game_sdk.dll','d3dcompiler_47.dll'
+          )
+          $missing = $required | Where-Object { -not (Test-Path "build-windows/bin/$_") }
+          if (-not (Test-Path 'build-windows/bin/locales/en-US.pak')) { $missing += 'locales/en-US.pak' }
+          if ($missing) { throw "Missing from build-windows/bin: $($missing -join ', ')" }
+
+          # The multiplayer menu is served from disk; the client CMakeLists builds
+          # it with npm and stages it here. Without it the client boots to a black
+          # screen, which is exactly the failure that goes unnoticed until launch.
+          if (-not (Test-Path 'build-windows/bin/files/kcdc/ui/index.html')) {
+            throw "The multiplayer UI was not staged - did the Preact build in ui/ run?"
+          }
+
+      # The shipped binary must report the version being released. If these
+      # disagree the release announces one version and hands players another.
+      - name: Verify the client reports the release version
+        shell: powershell
+        env:
+          RELEASE_CORE: ${{ needs.plan.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $core = ($env:RELEASE_CORE -split '-')[0]
+          $text = [System.IO.File]::ReadAllText('build-windows/bin/KCDCClient.dll', [System.Text.Encoding]::ASCII)
+          if ($text -notmatch [regex]::Escape($core)) {
+            throw "KCDCClient.dll does not carry version $core - is the build tree stale on VERSION?"
+          }
+          Write-Host "Client carries version $core."
+
+      # Collect debug files for private crash symbolication in Sentry. The
+      # Windows server reports to the same project, so include its PDB too.
+      - name: Collect client symbols
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path symbols | Out-Null
+          foreach ($f in @('KCDCClient.dll','KCDCClient.pdb','KCDCLauncher.exe','KCDCLauncher.pdb','cef_subprocess.exe','cef_subprocess.pdb','KCDCServer.exe','KCDCServer.pdb')) {
+            $p = "build-windows/bin/$f"
+            if (Test-Path $p) { Copy-Item $p symbols/ } else { Write-Host "note: $f not produced, skipping" }
+          }
+          if (-not (Test-Path 'symbols/KCDCClient.pdb')) { throw "KCDCClient.pdb missing - the Release debug-info flags are not taking effect" }
+          if (-not (Test-Path 'symbols/KCDCServer.pdb')) { throw "KCDCServer.pdb missing - the Release debug-info flags are not taking effect" }
+          Get-ChildItem symbols | Select-Object Name,Length
+
+      # Upload debug files without bundling source files.
+      - name: Upload client debug files to Sentry
+        if: env.SENTRY_AUTH_TOKEN != '' && env.SENTRY_ORG != '' && env.SENTRY_PROJECT != ''
+        shell: powershell
+        run: npx --yes @sentry/cli@${{ vars.SENTRY_CLI_VERSION || '2' }} debug-files upload --wait symbols
+
+      # Symbols stripped from the package, plus the developer-only and
+      # machine-specific files scripts/package_client.bat also leaves out:
+      # KCDC_launcher.json is regenerated from Steam on first launch, and
+      # steam_appid.txt is written by the launcher before it touches Steam.
+      # KCDCServer.exe and resources/ are the server's share of the common bin/.
+      - name: Stage client bundle (no symbols)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          robocopy "build-windows/bin" "stage/client" /E /NFL /NDL /NJH /NJS /NP `
+            /XF *.pdb *.ilk *.lib *.exp *.map *.iobj *.ipdb KCDC_launcher.json steam_appid.txt server.json KCDCServer.exe `
+            /XD CMake include logs cache launcher_cache resources
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          Copy-Item -LiteralPath LICENSE.txt, NOTICE.txt -Destination stage/client/
+          if (-not (Test-Path 'stage/client/licenses/Framework-LICENSE.txt' -PathType Leaf)) { throw 'Missing bundled Framework license' }
+          exit 0
+
+      # The bundle is what players download, so the no-debug-info rule is enforced
+      # here rather than trusted to the robocopy filter above.
+      - name: Verify bundle carries no debug information or UI sources
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bad = Get-ChildItem -Path stage/client -Recurse -File -Include *.pdb,*.ilk,*.exp,*.map,*.iobj,*.ipdb,*.lib
+          if ($bad) {
+            $bad | ForEach-Object { Write-Host "debug artifact in bundle: $($_.FullName)" }
+            throw "$($bad.Count) debug artifact(s) staged for release"
+          }
+
+          # Players get the transpiled UI and nothing else. ui/ is never copied
+          # into bin/ - only its files/kcdc/ui output is - so this catches a
+          # build rule that starts dragging the source tree along, or a sourcemap
+          # left switched on in vite.config.ts. (A .map already fails the check
+          # above, which matters most: one reconstructs the entire original tree.)
+          $sources = @()
+          $sources += Get-ChildItem -Path stage/client -Recurse -File -Include *.ts,*.tsx,*.jsx,*.scss,*.sass,vite.config.*,pnpm-lock.yaml,package-lock.json
+          $sources += Get-ChildItem -Path stage/client -Recurse -Directory -Filter node_modules
+          if ($sources) {
+            $sources | ForEach-Object { Write-Host "UI source in bundle: $($_.FullName)" }
+            throw "$($sources.Count) UI source file(s)/folder(s) staged for release - ship files/kcdc/ui only, never ui/"
+          }
+
+          # A CodeView record may name the PDB, but never a filesystem path to it.
+          # Scoped to our own artifacts: vendored prebuilts (CEF, Discord, Steam,
+          # OpenSSL) carry their upstream build paths and are not ours to relink.
+          $ours = @('KCDCClient.dll','KCDCLauncher.exe','cef_subprocess.exe','FrameworkLoaderData.dll','MafiaHubUpdater.exe')
+          $leaks = @()
+          foreach ($bin in Get-ChildItem -Path stage/client -Recurse -File | Where-Object { $ours -contains $_.Name }) {
+            # Only the binary's own PDB. /PDBALTPATH governs the CodeView record our link
+            # writes; a statically linked dependency can carry an absolute path of its own
+            # that we cannot relink away - since the vcpkg migration openssl records its
+            # cl.exe command line, /Fdossl_static.pdb and all, into everything linking it.
+            # That is what failed 1.3.3 on the launcher, a full build after the check was
+            # written and none of it ours.
+            $pdb  = [regex]::Escape([System.IO.Path]::GetFileNameWithoutExtension($bin.Name) + '.pdb')
+            $text = [System.IO.File]::ReadAllText($bin.FullName, [System.Text.Encoding]::ASCII)
+            foreach ($m in [regex]::Matches($text, '[A-Za-z]:\\[^\x00]{0,200}?' + $pdb)) {
+              $leaks += "$($bin.Name): $($m.Value)"
+            }
+          }
+          if ($leaks) {
+            $leaks | ForEach-Object { Write-Host "embedded build path: $_" }
+            throw "$($leaks.Count) first-party binary/binaries leak an absolute PDB path - is /PDBALTPATH set?"
+          }
+          Write-Host "Bundle is clean: no symbol files, no UI sources, no build paths in first-party binaries."
+
+      - name: Upload client bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: client
+          path: stage/client
+          compression-level: 9
+          include-hidden-files: true
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Sanity-check server artifacts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($f in @('KCDCServer.exe','libnode.dll','crashpad_handler.exe')) {
+            if (-not (Test-Path "build-windows/bin/$f")) { throw "Missing build-windows/bin/$f" }
+          }
+          # The default gamemode ships as source: its manifest, its lockfile and
+          # the TypeScript entry points, so an operator can read it and build it.
+          foreach ($f in @('resources/kcdc-gamemode/package.json','resources/kcdc-gamemode/package-lock.json','resources/kcdc-gamemode/tsconfig.json','resources/kcdc-gamemode/src/server/index.ts','resources/kcdc-gamemode/src/client/index.ts')) {
+            if (-not (Test-Path "build-windows/bin/$f")) { throw "Missing build-windows/bin/$f - the shipped gamemode is not buildable" }
+          }
+          # A release resource ships its sources, never its emit.
+          $emitted = @(Get-ChildItem -Path build-windows/bin/resources -Recurse -Directory -Filter dist -ErrorAction SilentlyContinue)
+          $emitted += @(Get-ChildItem -Path build-windows/bin/resources -Recurse -Directory -Filter node_modules -ErrorAction SilentlyContinue)
+          if ($emitted.Count -gt 0) {
+            $emitted | ForEach-Object { Write-Host "resource emit in bundle: $($_.FullName)" }
+            throw "Compiled output or node_modules staged into a release resource bundle"
+          }
+
+      # In the repository the gamemode's @kingdomsconnected/types is a link to
+      # scripting-api/, which a release does not ship; the bundled copy depends
+      # on the version this run publishes last, locked to the tarball it packed.
+      - name: Point the shipped gamemode at @kingdomsconnected/types
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node scripts/stage_gamemode_types.mjs --gamemode build-windows/bin/resources/kcdc-gamemode --version "${{ needs.plan.outputs.version }}" --integrity "${{ needs.pack-types.outputs.integrity }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/stage_gamemode_types.mjs --gamemode build-windows/bin/resources/optional/kcdc-playground --version "${{ needs.plan.outputs.version }}" --integrity "${{ needs.pack-types.outputs.integrity }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (Test-Path build-windows/bin/resources/kcdc-gamemode/node_modules) { throw "The lockfile refresh installed node_modules into the bundle" }
+
+      # bin/ also holds the whole client runtime, so the server bundle is an
+      # allowlist rather than an exclusion filter. A runtime file the server
+      # starts to need has to be added here and to the sanity check above.
+      - name: Stage server bundle (no symbols)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          robocopy "build-windows/bin" "stage/server" KCDCServer.exe libnode.dll crashpad_handler.exe /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          robocopy "build-windows/bin/resources" "stage/server/resources" /E /NFL /NDL /NJH /NJS /NP
+          if ($LASTEXITCODE -ge 8) { exit 1 }
+          Copy-Item -LiteralPath LICENSE.txt, NOTICE.txt -Destination stage/server/
+          New-Item -ItemType Directory -Force -Path stage/server/licenses | Out-Null
+          Copy-Item -LiteralPath build-windows/bin/licenses/Framework-LICENSE.txt -Destination stage/server/licenses/
+          exit 0
+
+      - name: Upload server bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: server
+          path: stage/server
+          compression-level: 9
+          retention-days: 1
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Linux server: KCDCServer (ELF) + libnode.so, copied next to the binary by
+  # the server's POST_BUILD step, plus crashpad_handler from the Sentry vendor.
+  # code/CMakeLists.txt builds only the server off MSVC, so the client and
+  # launcher are absent here by construction.
+  #
+  # The public server image is staged from this bundle, and
+  # scripts/stage_server_image.py refuses a runtime carrying DWARF or a symbol
+  # table, so it leaves here stripped.
+  # ---------------------------------------------------------------------------
+  build-server-linux:
+    name: Server (Linux x64)
+    needs: [plan, pack-types]
+    if: needs.plan.outputs.promote_run_id == ''
+    # Pinned, not ubuntu-latest: the Framework SDK's Linux archive is built on 24.04 and
+    # FrameworkAbi.cmake refuses a different GCC major (static libraries bind to it).
+    runs-on: ubuntu-24.04
+    # Job scope for the same reason as the Windows job above.
+    env:
+      SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+      SENTRY_ORG: ${{ vars.SENTRY_ORG || secrets.SENTRY_ORG }}
+      SENTRY_PROJECT: ${{ vars.SENTRY_PROJECT || secrets.SENTRY_PROJECT }}
+    steps:
+      - name: Checkout KCDC
+        uses: actions/checkout@v5
+
+      # Only for the framework_ref override: the Framework built from source as a
+      # subdirectory (FW_SOURCE_DIR) instead of the pinned SDK archive.
+      - name: Checkout Framework source (override only)
+        if: needs.plan.outputs.framework_ref != ''
+        uses: actions/checkout@v5
+        with:
+          repository: MafiaHub/Framework
+          ref: ${{ needs.plan.outputs.framework_ref }}
+          path: framework-src
+          submodules: false
+
+      # autoconf/automake/libtool are for vcpkg, not for us: sentry-native pulls libunwind on
+      # Linux, whose port is autotools-based and refuses to configure without them.
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build build-essential g++ libcurl4-openssl-dev autoconf autoconf-archive automake libtool
+
+      - name: Set up CMake + Ninja
+        uses: lukka/get-cmake@latest
+
+      # -g buys DWARF for Sentry without changing the code (-O3 -DNDEBUG stands);
+      # the staged binary is stripped again below. Sentry matches a debug file to
+      # a crash by GNU build-id, the one thing that has to survive that strip, so
+      # it is forced rather than left to the distro default.
+      # Same derivation as the Windows job; see the comment there.
+      - name: Derive RPC identifier salt
+        env:
+          RPC_SALT_KEY: ${{ secrets.KCDC_RPC_SALT_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RPC_SALT_KEY}" ]; then
+            echo "::error::KCDC_RPC_SALT_KEY is not set; refusing to ship the public default RPC identifier salt."
+            exit 1
+          fi
+          SALT="0x$(printf '%s' "${GITHUB_REF_NAME}" | openssl dgst -sha256 -hmac "${RPC_SALT_KEY}" -r | cut -c1-16)"
+          echo "::add-mask::${SALT}"
+          echo "KCDC_RPC_IDENTIFIER_SALT=${SALT}" >> "$GITHUB_ENV"
+
+      - name: Configure (Release, Linux x64)
+        run: cmake -B build-server-linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DKCDC_STAGE_RESOURCE_SOURCES=ON
+          -DFW_SOURCE_DIR="${{ needs.plan.outputs.framework_ref != '' && format('{0}/framework-src', github.workspace) || '' }}"
+          -DFW_RPC_IDENTIFIER_SALT="${KCDC_RPC_IDENTIFIER_SALT}"
+          -DKCDC_REQUIRE_RPC_IDENTIFIER_SALT=ON
+          -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+          -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -g"
+          -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -g"
+          -DCMAKE_EXE_LINKER_FLAGS_RELEASE="-Wl,--build-id=sha1"
+          -DCMAKE_SHARED_LINKER_FLAGS_RELEASE="-Wl,--build-id=sha1"
+
+      - name: Build server
+        run: cmake --build build-server-linux --target KCDCServer
+
+      - name: Sanity-check artifacts
+        run: |
+          set -euo pipefail
+          test -f build-server-linux/bin/KCDCServer || { echo "Missing KCDCServer"; exit 1; }
+          ls build-server-linux/bin/libnode.so* >/dev/null 2>&1 || { echo "Missing libnode.so"; exit 1; }
+          test -f build-server-linux/bin/crashpad_handler || { echo "Missing crashpad_handler"; exit 1; }
+          readelf -S build-server-linux/bin/KCDCServer | grep -q '\.debug_info' \
+            || { echo "KCDCServer has no DWARF - the Release -g flag is not taking effect"; exit 1; }
+          readelf -n build-server-linux/bin/KCDCServer | grep -q 'Build ID' \
+            || { echo "KCDCServer has no GNU build-id - --build-id is not taking effect"; exit 1; }
+          # The default gamemode ships as source: its manifest, its lockfile and
+          # the TypeScript entry points, so an operator can read it and build it.
+          # The public image is staged from this bundle.
+          for f in resources/kcdc-gamemode/package.json resources/kcdc-gamemode/package-lock.json resources/kcdc-gamemode/tsconfig.json resources/kcdc-gamemode/src/server/index.ts resources/kcdc-gamemode/src/client/index.ts; do
+            test -f "build-server-linux/bin/$f" || { echo "Missing build-server-linux/bin/$f - the shipped gamemode is not buildable"; exit 1; }
+          done
+          # A release resource ships its sources, never its emit.
+          bad=$(find build-server-linux/bin/resources \( -name dist -o -name node_modules \) -print)
+          if [ -n "$bad" ]; then
+            echo "$bad" | sed 's/^/resource emit in bundle: /'
+            echo "Compiled output or node_modules staged into a release resource bundle"; exit 1
+          fi
+
+      # Always: the gamemode staging below needs it, and the Sentry upload too.
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      # The unstripped ELF is its own debug file, so it goes up whole; libnode.so
+      # is a vendored prebuilt with no DWARF. --include-sources is deliberately
+      # NOT passed - it would upload the source itself.
+      - name: Upload Linux server debug files to Sentry
+        if: env.SENTRY_AUTH_TOKEN != '' && env.SENTRY_ORG != '' && env.SENTRY_PROJECT != ''
+        run: |
+          set -euo pipefail
+          mkdir -p symbols-server-linux
+          cp build-server-linux/bin/KCDCServer symbols-server-linux/
+          npx --yes @sentry/cli@${{ vars.SENTRY_CLI_VERSION || '2' }} debug-files upload --wait symbols-server-linux
+
+      # Same as the Windows job: the bundled gamemode depends on the package this
+      # run publishes last, since scripting-api/ does not ship.
+      - name: Point the shipped gamemode at @kingdomsconnected/types
+        run: |
+          set -euo pipefail
+          node scripts/stage_gamemode_types.mjs --gamemode build-server-linux/bin/resources/kcdc-gamemode --version "${{ needs.plan.outputs.version }}" --integrity "${{ needs.pack-types.outputs.integrity }}"
+          node scripts/stage_gamemode_types.mjs --gamemode build-server-linux/bin/resources/optional/kcdc-playground --version "${{ needs.plan.outputs.version }}" --integrity "${{ needs.pack-types.outputs.integrity }}"
+          if [ -e build-server-linux/bin/resources/kcdc-gamemode/node_modules ]; then
+            echo "The lockfile refresh installed node_modules into the bundle"; exit 1
+          fi
+
+      - name: Stage server bundle (no symbols)
+        run: |
+          set -euo pipefail
+          mkdir -p stage/server-linux
+          rsync -a --exclude='*.a' --exclude='*.o' --exclude='CMake*' \
+            --exclude='*.debug' --exclude='*.dwo' --exclude='*.dwp' --exclude='*.log' \
+            build-server-linux/bin/ stage/server-linux/
+          cp LICENSE.txt NOTICE.txt stage/server-linux/
+          test -s stage/server-linux/licenses/Framework-LICENSE.txt
+          # The symbols are in Sentry now; strip preserves the build-id that
+          # matches them back. libnode.so is left exactly as vendored.
+          strip --strip-all stage/server-linux/KCDCServer
+          chmod +x stage/server-linux/KCDCServer
+
+      # Shipping DWARF or a symbol table for a network-facing binary hands out its
+      # full type and private-symbol information, and the public image is staged
+      # from exactly these bytes - so check, rather than trust the two steps above.
+      - name: Verify Linux server bundle carries no debug information
+        run: |
+          set -euo pipefail
+          bad=$(find stage/server-linux -type f \( -name '*.debug' -o -name '*.dwo' -o -name '*.dwp' -o -name '*.pdb' -o -name '*.a' -o -name '*.o' \) -print)
+          if [ -n "$bad" ]; then
+            echo "$bad" | sed 's/^/debug artifact in bundle: /'
+            echo "debug artifact(s) staged for release"; exit 1
+          fi
+          if readelf -S stage/server-linux/KCDCServer | grep -qE '\.debug_|\.symtab'; then
+            echo "KCDCServer still carries DWARF or a symbol table after strip"; exit 1
+          fi
+          readelf -n stage/server-linux/KCDCServer | grep -q 'Build ID' \
+            || { echo "strip removed the build-id - uploaded symbols could never be matched"; exit 1; }
+          echo "Linux server bundle is clean: stripped, build-id intact."
+
+      - name: Upload server bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-linux
+          path: stage/server-linux
+          compression-level: 9
+          retention-days: 1
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Assemble one zip and publish it: to the MafiaHub channel, and to a GitHub
+  # Release.
+  # ---------------------------------------------------------------------------
+  package-publish:
+    name: Package & publish
+    needs: [plan, build-windows, build-server-linux]
+    # The two build jobs are skipped on a promotion, and a skipped `needs` would
+    # normally skip this job too. A status-check function in the condition
+    # overrides that, so guard on failure explicitly.
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+      INSTALL_CHANNEL: ${{ needs.plan.outputs.install_channel }}
+      NAME: ${{ needs.plan.outputs.name }}
+      PROMOTE_RUN_ID: ${{ needs.plan.outputs.promote_run_id }}
+      FRAMEWORK_REF: ${{ needs.plan.outputs.framework_label }}
+    steps:
+      - name: Checkout KCDC (changelog, tags)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Either this run's build jobs or the prerelease run being promoted. The
+      # artifacts are identical in shape; only their provenance differs.
+      - name: Download build bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundle
+          run-id: ${{ needs.plan.outputs.promote_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble distribution
+        id: assemble
+        run: |
+          set -euo pipefail
+          mkdir -p "${NAME}/client" "${NAME}/server" "${NAME}/server-linux" "${NAME}/resources"
+          cp -a bundle/client/. "${NAME}/client/"
+          cp -a bundle/server/. "${NAME}/server/"
+          cp -a bundle/server-linux/. "${NAME}/server-linux/"
+          chmod +x "${NAME}/server-linux/KCDCServer" || true
+
+          # Promotion keeps the notices that travelled with the tested binaries.
+          for notice in LICENSE.txt NOTICE.txt; do
+            for side in client server server-linux; do
+              if ! cmp -s "$notice" "bundle/$side/$notice"; then
+                echo "::error::The $side bundle is missing the release's $notice."
+                exit 1
+              fi
+            done
+            cp "bundle/server/$notice" "${NAME}/$notice"
+          done
+          for side in client server server-linux; do
+            test -s "bundle/$side/licenses/Framework-LICENSE.txt"
+          done
+          mkdir -p "${NAME}/licenses"
+          cp bundle/server/licenses/Framework-LICENSE.txt "${NAME}/licenses/"
+
+          # Both server bundles already carry resources/ next to their binary,
+          # which is where each reads them from. This copy is the one an
+          # operator edits and uploads, taken from a staged bundle rather than
+          # the checkout so it cannot disagree with what they run.
+          cp -a bundle/server/resources/. "${NAME}/resources/"
+
+          # The one per-channel bit in an otherwise channel-neutral build.
+          # Nothing about the channel is compiled in -- the build job passes no
+          # KCDC_PATCHER_CHANNEL, so the binaries are identical whatever channel
+          # they ship on -- and the payload carries its own value instead. That
+          # is what lets a tested prerelease bundle be promoted to stable
+          # without a rebuild.
+          #
+          # This is INSTALL_CHANNEL, not CHANNEL: it names where the archive is
+          # served to players, which for a final tag is `stable` even though
+          # this run uploads to `testing`. Stamping the upload channel instead
+          # is what pinned stable installs to `testing`.
+          #
+          # It is a seed and nothing more. It decides which channel an
+          # installation patches from on its very first start, before it has a
+          # manifest; from the first patch onwards the launcher asks Services
+          # which channel the build it is running is served on, so a promotion
+          # reaches installations without this file being rewritten. Someone
+          # who wants to stay on prereleases writes .mafiahub/channel-override
+          # instead, which is theirs and is never overwritten by an update.
+          #
+          # code/launcher/src/patcher.cpp reads it as a seed, recovers it from
+          # .mafiahub/build-manifest.json when it is missing, and patches
+          # nothing when it has neither rather than guessing a channel.
+          mkdir -p "${NAME}/client/.mafiahub"
+          printf '%s' "${INSTALL_CHANNEL}" > "${NAME}/client/.mafiahub/channel"
+
+          # The player-facing note, kept in step with scripts/package_client.bat.
+          cat > "${NAME}/README.txt" <<'NOTE'
+          Kingdoms Connected (KCDC)
+
+          Kingdom Come: Deliverance II must be installed through Steam, and the
+          Steam client must be running. The launcher asks Steam for the install
+          directory, so nothing here has to be copied into the game folder and the
+          game's own files are never modified.
+
+            1. Unpack this folder anywhere you like.
+            2. Start Steam.
+            3. Run client/KCDCLauncher.exe.
+
+          On the first run the launcher writes KCDC_launcher.json next to itself
+          with the resolved game path. Delete that file to have it detected again.
+
+          The launcher updates itself on every start, then restarts; what it did
+          is in client/.mafiahub/logs/patcher.log. Unpack the archive rather than
+          copying files out of it, or the update check has nothing to go on.
+
+          Servers listed in the in-game browser come from
+          client/files/kcdc/servers.tsv, one per line, tab separated: name, host,
+          port and an optional password. The browser reloads it every time you
+          enter the main menu.
+
+          Logs are written to logs/ next to the launcher.
+
+          Needs the Microsoft Visual C++ 2015-2022 x64 redistributable, which the
+          game itself already installs.
+
+          server/ and server-linux/ hold the dedicated server for each platform.
+          Each carries its own resources/, and resources/ at the top of this
+          folder is the same gamemode on its own, to edit or to upload to a
+          hosted server. The gamemode ships as TypeScript so you can read and
+          change it: run `npm ci` and `npm run build` inside
+          resources/kcdc-gamemode before starting the server, or it answers no
+          commands.
+          NOTE
+
+          zip -rq "${NAME}.zip" "${NAME}"
+          {
+            echo "zip=${NAME}.zip"
+            echo "size=$(du -h "${NAME}.zip" | cut -f1)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.4.1 --activate
+
+      # Commits since the previous tag. KCDC has no changelog generator, and a
+      # release that lists its own commits is more honest than one that lists
+      # nothing.
+      - name: Generate release notes
+        id: notes
+        run: |
+          set -euo pipefail
+          PREVIOUS="$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)"
+          {
+            echo "Published to: \`${CHANNEL}\`"
+            echo "Installs patch from: \`${INSTALL_CHANNEL}\`"
+            echo "Commit: \`${GITHUB_SHA}\`"
+            echo "Framework: \`${FRAMEWORK_REF}\`"
+            if [ -n "${PROMOTE_RUN_ID}" ]; then
+              echo "Binaries: promoted unchanged from prerelease run [\`${PROMOTE_RUN_ID}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${PROMOTE_RUN_ID})"
+            else
+              echo "Binaries: built by this run"
+            fi
+            echo
+            echo "## Changes"
+            echo
+            if [ -n "${PREVIOUS}" ]; then
+              git log --no-merges --pretty='- %s' "${PREVIOUS}..${GITHUB_REF_NAME}"
+            else
+              echo "- First tagged release."
+            fi
+          } > release-body.md
+          cat release-body.md
+
+      - name: Publish client build to MafiaHub Services
+        env:
+          MAFIAHUB_BUILD_UPLOAD_TOKEN: ${{ secrets.KCDC_BUILD_UPLOAD_TOKEN }}
+          MAFIAHUB_SERVICES_CLI_VERSION: ${{ vars.MAFIAHUB_SERVICES_CLI_VERSION }}
+          KCDC_SERVICES_API_URL: ${{ vars.KCDC_SERVICES_API_URL }}
+          KCDC_SERVICES_MOD_ID: ${{ vars.KCDC_SERVICES_MOD_ID }}
+          ZIP: ${{ steps.assemble.outputs.zip }}
+        run: |
+          set -euo pipefail
+          : "${MAFIAHUB_BUILD_UPLOAD_TOKEN:?KCDC_BUILD_UPLOAD_TOKEN is not set}"
+          : "${KCDC_SERVICES_API_URL:?KCDC_SERVICES_API_URL is not set}"
+          : "${KCDC_SERVICES_MOD_ID:?KCDC_SERVICES_MOD_ID is not set}"
+          CLI_VERSION="${MAFIAHUB_SERVICES_CLI_VERSION:-$(tr -d ' \t\r\n' < scripting-api/services-cli.version)}"
+          pnpm dlx "@mafiahub/services-cli@${CLI_VERSION}" builds publish \
+            --api-url "${KCDC_SERVICES_API_URL}" \
+            --mod-id "${KCDC_SERVICES_MOD_ID}" \
+            --channel "${CHANNEL}" \
+            --version "${VERSION}" \
+            --root "${NAME}/client" \
+            --metadata tag="${GITHUB_REF_NAME}" \
+            --metadata commit="${GITHUB_SHA}" \
+            --metadata release_revision="${GITHUB_SHA}" \
+            --metadata framework="${FRAMEWORK_REF}" \
+            --metadata run_id="${GITHUB_RUN_ID}" \
+            --metadata promoted_from="${PROMOTE_RUN_ID:-}" \
+            --metadata release_zip="${ZIP}" \
+            --metadata channel_portable=true \
+            --json
+
+      # Publish the zip through the services API as well as the GitHub Release.
+      # createReleaseArchiveUpload, authorized by the build upload token, hands
+      # back a presigned PUT for the zip and a long-lived presigned GET. No bucket
+      # credentials in CI - the API owns the storage.
+      - name: Publish release zip via MafiaHub Services
+        id: archive
+        env:
+          KCDC_SERVICES_API_URL: ${{ vars.KCDC_SERVICES_API_URL }}
+          KCDC_SERVICES_MOD_ID: ${{ vars.KCDC_SERVICES_MOD_ID }}
+          MAFIAHUB_BUILD_UPLOAD_TOKEN: ${{ secrets.KCDC_BUILD_UPLOAD_TOKEN }}
+          ZIP: ${{ steps.assemble.outputs.zip }}
+        run: |
+          set -euo pipefail
+          : "${KCDC_SERVICES_API_URL:?KCDC_SERVICES_API_URL is not set}"
+          : "${KCDC_SERVICES_MOD_ID:?KCDC_SERVICES_MOD_ID is not set}"
+          : "${MAFIAHUB_BUILD_UPLOAD_TOKEN:?KCDC_BUILD_UPLOAD_TOKEN is not set}"
+          SIZE="$(stat -c%s "$ZIP")"
+          SHA256="$(sha256sum "$ZIP" | cut -d' ' -f1)"
+          jq -n \
+            --arg modId "$KCDC_SERVICES_MOD_ID" \
+            --arg channel "$CHANNEL" \
+            --arg fileName "$ZIP" \
+            --argjson size "$SIZE" \
+            --arg sha256 "$SHA256" \
+            '{
+              query: "mutation($input: CreateReleaseArchiveUploadInput!) { createReleaseArchiveUpload(input: $input) { uploadUrl headers downloadUrl downloadExpiresAt } }",
+              variables: { input: { modId: $modId, channel: $channel, fileName: $fileName, size: $size, sha256: $sha256, contentType: "application/zip" } }
+            }' > request.json
+          RESPONSE="$(curl -fsS "${KCDC_SERVICES_API_URL%/}/graphql" \
+            -H "Content-Type: application/json" \
+            -H "x-mafiahub-build-token: ${MAFIAHUB_BUILD_UPLOAD_TOKEN}" \
+            -d @request.json)"
+          if [ "$(jq 'has("errors")' <<<"$RESPONSE")" = "true" ]; then
+            jq -r '.errors[].message' <<<"$RESPONSE" >&2
+            exit 1
+          fi
+          UPLOAD_URL="$(jq -re '.data.createReleaseArchiveUpload.uploadUrl' <<<"$RESPONSE")"
+          # The presigned PUT signs its headers - send exactly what the API returned.
+          jq -r '.data.createReleaseArchiveUpload.headers | to_entries[] | "header \"\(.key): \(.value)\""' <<<"$RESPONSE" > curl_headers.cfg
+          curl -fsS --config curl_headers.cfg -T "$ZIP" "$UPLOAD_URL" > /dev/null
+          {
+            echo "url=$(jq -re '.data.createReleaseArchiveUpload.downloadUrl' <<<"$RESPONSE")"
+            echo "expires=$(jq -re '.data.createReleaseArchiveUpload.downloadExpiresAt' <<<"$RESPONSE")"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Kingdoms Connected ${{ needs.plan.outputs.version }}
+          body_path: release-body.md
+          prerelease: ${{ needs.plan.outputs.prerelease == 'true' }}
+          files: ${{ steps.assemble.outputs.zip }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Public server image, assembled from the tested Linux artifact. It carries
+  # the stripped runtime, bundled notices, default gamemode, startup wrapper
+  # and Pterodactyl egg. It runs after the
+  # release is published, so an image only exists for a release that exists. It
+  # publishes the exact version, and a final release also moves `latest` to it;
+  # a prerelease never does.
+  # ---------------------------------------------------------------------------
+  publish-server-image:
+    name: Publish public server image
+    needs: [plan, package-publish]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.package-publish.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+      packages: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      DOCKER_BUILD_SUMMARY: "false"
+      DOCKER_BUILD_CHECKS_ANNOTATIONS: "false"
+      BUILDX_GIT_INFO: "false"
+      BUILDX_GIT_LABELS: "false"
+    steps:
+      # Packaging files only, and no credentials: nothing here may reach for the
+      # mod's source.
+      - name: Checkout container packaging files
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            deploy
+            scripts/stage_server_image.py
+            scripts/test_stage_server_image.py
+            scripts/render_pterodactyl_egg.py
+            scripts/test_pterodactyl_egg.py
+            scripts/smoke_pterodactyl.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Test public packaging boundary
+        run: python3 -m unittest discover -s scripts -p 'test_*egg.py' -v && python3 -m unittest discover -s scripts -p test_stage_server_image.py -v
+
+      - name: Download tested Linux server
+        uses: actions/download-artifact@v4
+        with:
+          name: server-linux
+          path: server-bundle
+          run-id: ${{ needs.plan.outputs.promote_run_id || github.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare runtime context
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/kcdc-server"
+          python3 scripts/stage_server_image.py server-bundle "${RUNNER_TEMP}/server-image" --image "${IMAGE}:${VERSION}"
+          echo "tag=${IMAGE}:${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Explicit path context: the checkout and its history never reach BuildKit.
+      - name: Build runtime image
+        uses: docker/build-push-action@v7
+        # The build record buildx uploads is an artifact kept for 90 days that
+        # nothing here ever reads back.
+        env:
+          DOCKER_BUILD_SUMMARY: false
+          DOCKER_BUILD_RECORD_UPLOAD: false
+        with:
+          context: ${{ runner.temp }}/server-image
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: ${{ steps.image.outputs.tag }}
+          provenance: false
+          sbom: false
+
+      - name: Verify startup and configurable ports
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Facts about the image, asserted without the entrypoint.
+          #
+          # Nothing here may read /home/container. Docker seeds a fresh
+          # anonymous volume from the image, but the first container started
+          # straight after `buildx --load` sometimes gets an unpopulated one,
+          # and then every path under /home/container is missing. That is a
+          # property of the daemon, not of what we ship -- the server never
+          # relies on the seeding, because the entrypoint creates those
+          # directories itself. So the volume is checked further down, against
+          # a container that has run it.
+          docker run --rm --entrypoint sh "$IMAGE" -ec '
+            test "$(id -u)" = 10001
+            # No layer of ours plants a resource in the operator volume; only
+            # the entrypoint does, and it never overwrites one already there.
+            ! test -e /home/container/resources/kcdc-gamemode
+            test -f /opt/kcdc/default-resources/kcdc-gamemode/package.json
+            test -f /opt/kcdc/default-resources/kcdc-gamemode/src/server/index.ts
+            test -s /opt/kcdc/LICENSE.txt
+            test -s /opt/kcdc/NOTICE.txt
+            test -s /opt/kcdc/licenses/Framework-LICENSE.txt
+            test -s /opt/kcdc/default-resources/kcdc-gamemode/LICENSE.txt
+            test -s /opt/kcdc/default-resources/kcdc-gamemode/NOTICE.txt
+            ! test -e /opt/kcdc/default-resources/kcdc-gamemode/dist
+            test -L /opt/kcdc/resources
+            test -L /opt/kcdc/.packages
+            ! ldd /opt/kcdc/KCDCServer | grep "not found"
+            ! ldd /opt/kcdc/crashpad_handler | grep "not found"
+          '
+          # HTTP is served on the game port's TCP side since Framework 40.2;
+          # there is no second listener to publish.
+          for GAME_PORT in 27015 28015; do
+            SERVER_ARGS=()
+            if [ "$GAME_PORT" != 27015 ]; then SERVER_ARGS=(--port "$GAME_PORT"); fi
+            CID=$(docker run -d --init -p "127.0.0.1::${GAME_PORT}/tcp" -p "127.0.0.1::${GAME_PORT}/udp" "$IMAGE" "${SERVER_ARGS[@]}")
+            trap 'docker logs "$CID"; docker rm -fv "$CID" >/dev/null' EXIT
+            HTTP_PORT=$(docker port "$CID" "${GAME_PORT}/tcp" | head -1 | cut -d: -f2)
+            READY=false
+            for ATTEMPT in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:${HTTP_PORT}/" -o status.json && jq -e --argjson port "$GAME_PORT" '.port == $port and .mod_name == "KCDC"' status.json >/dev/null; then
+                READY=true
+                break
+              fi
+              sleep 2
+            done
+            test "$READY" = true
+            docker exec "$CID" test -f /home/container/server.json
+            # The entrypoint seeded the gamemode into the operator's volume. It
+            # ships as source, so the server does not run it until the operator
+            # builds it -- what is checked here is the seeding, not the loading.
+            docker exec "$CID" test -f /home/container/resources/kcdc-gamemode/src/server/index.ts
+            # Streamed resources and packages resolve into the operator's
+            # volume and are writable by the uid the server runs as. This has
+            # to be checked here rather than against the bare image: the
+            # entrypoint is what guarantees those directories exist.
+            docker exec "$CID" test -w /opt/kcdc/resources
+            docker exec "$CID" test -w /opt/kcdc/.packages
+            # Confirm a UDP listener exists, not just a Docker port mapping.
+            HEX_PORT=$(printf '%04X' "$GAME_PORT")
+            docker exec "$CID" cat /proc/net/udp | grep -E ":${HEX_PORT} "
+            docker stop --time 30 "$CID" >/dev/null
+            EXIT_CODE=$(docker inspect -f '{{.State.ExitCode}}' "$CID")
+            if [ "$EXIT_CODE" != 0 ]; then
+              echo "::error::Server exited with status ${EXIT_CODE} after SIGTERM on game port ${GAME_PORT}; expected graceful shutdown with status 0."
+              exit 1
+            fi
+            docker rm -v "$CID" >/dev/null
+            trap - EXIT
+          done
+
+      - name: Verify Pterodactyl startup, persistence and shutdown
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        run: bash scripts/smoke_pterodactyl.sh "$IMAGE" "${RUNNER_TEMP}/server-image/egg-kcdc.json"
+
+      - name: Authenticate to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The exact image the checks above ran against; nothing is rebuilt here.
+      - name: Push versioned image
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        run: docker push "$IMAGE"
+
+      - name: Verify anonymous public access
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANONYMOUS_CONFIG=$(mktemp -d)
+          if ! docker --config "$ANONYMOUS_CONFIG" manifest inspect "$IMAGE" >/dev/null; then
+            echo "::error::Set the GHCR kcdc-server package visibility to Public, grant this repository Actions write access, then rerun this job. See docs/server-container.md."
+            exit 1
+          fi
+          printf 'Public server image: `%s`\n' "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
+
+      # Same digest as the versioned tag, so `latest` is only ever an image that
+      # passed the checks above and is already publicly readable.
+      - name: Move latest to this release
+        if: ${{ needs.plan.outputs.prerelease != 'true' }}
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          LATEST="${IMAGE%:*}:latest"
+          docker tag "$IMAGE" "$LATEST"
+          docker push "$LATEST"
+          printf 'Moved `%s` to `%s`\n' "$LATEST" "$IMAGE" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Attach importable Pterodactyl egg to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" "${RUNNER_TEMP}/server-image/egg-kcdc.json" --clobber
+
+  # ---------------------------------------------------------------------------
+  # @kingdomsconnected/types on npm: the last step, run only once every build,
+  # upload and image above has succeeded. An npm version can never be published
+  # twice, so publishing it any earlier would lock the version to a release that
+  # then failed. The file is the tarball `pack-types` packed, so its integrity is
+  # the one every bundled gamemode's lockfile already names.
+  # ---------------------------------------------------------------------------
+  publish-types:
+    name: Publish @kingdomsconnected/types
+    needs: [plan, pack-types, package-publish, publish-server-image]
+    if: ${{ !cancelled() && needs.pack-types.result == 'success' && needs.package-publish.result == 'success' && needs.publish-server-image.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm 11.5.1 or later; Node 22 bundles 10.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Download the tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: types-package
+          path: types-package
+
+      - name: Publish the package
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+          INTEGRITY: ${{ needs.pack-types.outputs.integrity }}
+        run: |
+          set -euo pipefail
+          FILE="$(ls types-package/*.tgz)"
+          if npm view "@kingdomsconnected/types@${VERSION}" version >/dev/null 2>&1; then
+            PUBLISHED_INTEGRITY="$(npm view "@kingdomsconnected/types@${VERSION}" dist.integrity)"
+            if [ "${PUBLISHED_INTEGRITY}" != "${INTEGRITY}" ]; then
+              echo "::error::@kingdomsconnected/types@${VERSION} is already published with ${PUBLISHED_INTEGRITY}, not the ${INTEGRITY} the bundles lock."
+              exit 1
+            fi
+            echo "@kingdomsconnected/types@${VERSION} is already published with the same tarball; leaving it."
+            exit 0
+          fi
+          TAG=latest
+          if [ "${PRERELEASE}" = "true" ]; then TAG=next; fi
+          npm publish "./${FILE}" --access public --tag "${TAG}"

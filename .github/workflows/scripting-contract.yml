@@ -1,0 +1,72 @@
+name: Validate scripting API contract
+
+# The committed metadata is the documentation source, so what CI can check is that the
+# declarations beside it are the ones the generator produces, and that they type-check.
+#
+# What it cannot check is whether the metadata itself is current: that file is written by a debug
+# binary as it registers its bindings, and neither the game nor a headless client runs here.
+# services-cli covers part of the gap by scanning the binding sources for undocumented members.
+
+on:
+  pull_request:
+    paths:
+      - "scripting-api/**"
+      - "scripts/build_scripting_contract.mjs"
+      - "code/shared/scripting/**"
+      - "code/server/src/core/scripting/**"
+      - "code/client/src/core/scripting/**"
+      - ".github/workflows/scripting-contract.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "scripting-api/**"
+      - "scripts/build_scripting_contract.mjs"
+      - "code/shared/scripting/**"
+      - "code/server/src/core/scripting/**"
+      - "code/client/src/core/scripting/**"
+      - ".github/workflows/scripting-contract.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: validate-scripting-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.4.1 --activate
+
+      # --skip-missing, unlike the publish workflow: a target whose binary has not been run since
+      # the metadata was committed has nothing to validate, and one absent side must not hold up
+      # review of a change to the other.
+      - name: Regenerate and type-check declarations
+        run: node scripts/build_scripting_contract.mjs --out build/scripting-contract --skip-missing
+
+      - name: Test server API consumer types
+        run: pnpm --package=typescript@5.9.2 dlx tsc -p scripting-api/tests/tsconfig.json
+
+      - name: Test client API consumer types
+        run: pnpm --package=typescript@5.9.2 dlx tsc -p scripting-api/tests/tsconfig.client.json
+
+      - name: Fail on stale committed declarations
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- scripting-api/generated; then
+            echo "::error::The committed declarations do not match the committed metadata. Run scripts/build_scripting_contract.mjs and commit scripting-api/generated."
+            git --no-pager diff -- scripting-api/generated
+            exit 1
+          fi
+          echo "Committed declarations are current."

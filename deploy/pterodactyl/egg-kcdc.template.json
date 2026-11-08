@@ -1,0 +1,28 @@
+{
+    "_comment": "KCDC egg template. Render with scripts/render_pterodactyl_egg.py before importing.",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "name": "KCDC - Kingdoms Connected",
+    "author": "contact@kingdomsconnected.com",
+    "description": "Kingdom Come: Deliverance II multiplayer server, native Linux amd64. One allocation serves the game session over UDP and the HTTP endpoints over TCP on the same port. The session holds up to 512 players; the level clients load is the 'mod.level' key in server.json. Supply your own gamemode resources through the file manager or SFTP. Runtime binaries ship in the public image; no private repository access is needed.",
+    "features": [],
+    "docker_images": {},
+    "file_denylist": [],
+    "startup": "/opt/kcdc/KCDCServer --host 0.0.0.0 --port {{SERVER_PORT}} --config server.json",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\": \"KCDC Server successfully started\"}",
+        "logs": "{}",
+        "stop": "^C"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/sh\nset -eu\nmkdir -p /mnt/server/resources /mnt/server/logs /mnt/server/.packages\necho 'KCDC runtime is supplied by the Docker image. Upload your gamemode to resources/.'\n",
+            "container": "ubuntu:24.04",
+            "entrypoint": "sh"
+        }
+    },
+    "variables": []
+}

@@ -1,0 +1,27 @@
+{
+  "//": "The server half. CommonJS because a resource is loaded through require(), so relative imports carry the .js extension the emit will have. `types` names only the server declarations from @kingdomsconnected/types: a resource runs in the framework's isolate, not a Node program. Here that package is linked to scripting-api/ (see package.json), so a binding and the code using it land together; a release bundle depends on the published version instead. The client half is a separate program under src/client -- the two declaration sets disagree about `Player` and cannot be loaded together. No `incremental`: a .tsbuildinfo that outlives its dist/ makes tsc exit 0 and emit nothing, which left the staged resource with no scripts to load. CMake already gates this compile on the sources, so tsc's own incrementality bought nothing.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "lib": ["ES2022"],
+
+    "rootDir": "src/server",
+    "outDir": "dist/server",
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "declaration": false,
+    "sourceMap": false,
+    "newLine": "lf",
+
+    "types": ["@kingdomsconnected/types/server"]
+  },
+  "include": ["src/server/**/*.ts"]
+}

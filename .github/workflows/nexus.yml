@@ -1,0 +1,207 @@
+name: Nexus Mods
+
+# Pushes a stable release to Nexus Mods. Run it by hand once the release has
+# been promoted to `stable` in MafiaHub Services: that promotion happens there,
+# not in GitHub, so release.yml cannot see it and never targets Nexus itself.
+#
+# Nothing is built here. The job takes the zip release.yml attached to the
+# GitHub release, proves that its client is byte for byte the build Services
+# serves on `stable`, and repackages it for Nexus:
+#
+#   - MafiaHubUpdater.exe is removed. It must never ship on Nexus.
+#   - .mafiahub/channel is replaced by .mafiahub/distribution, which switches
+#     the launcher's build patcher off (code/launcher/src/patcher.cpp). With
+#     the channel still in place the patcher would download the updater back
+#     from the manifest on the first start.
+#
+# A Nexus install is therefore updated through Nexus or Vortex, never by the
+# launcher. The launcher binary is the one Services ships; only the stamp
+# differs, as it does between channels.
+#
+# Required repository secrets:
+#   NEXUSMODS_API_KEY         - Nexus Mods API key of an account allowed to
+#                               upload files to the mod.
+#   KCDC_BUILD_DOWNLOAD_TOKEN - MafiaHub build download token, to read the
+#                               `stable` manifest the upload is checked against.
+#
+# The Nexus file each release is added to as a new version is NEXUSMODS_FILE_ID
+# below: the "API" File ID from that file's API Info on the mod page, which
+# is what the action's /mod-files/{id}/versions endpoint takes -- not the
+# short unique file ID or the unique mod ID shown beside it. It is public, so
+# it lives here rather than in repository settings.
+#
+# Required repository variables:
+#   KCDC_SERVICES_API_URL - MafiaHub API base URL.
+#   KCDC_SERVICES_MOD_ID  - MafiaHub mods.id UUID for KCDC.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to push to Nexus Mods (vMAJOR.MINOR.PATCH). It must already be the `stable` build in MafiaHub Services."
+        required: true
+
+concurrency:
+  group: nexus-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish-nexus:
+    name: Publish to Nexus Mods
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      TAG: ${{ inputs.tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      NEXUSMODS_FILE_ID: "8032029"
+    steps:
+      - name: Resolve the release
+        id: identity
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::'${TAG}' is not a final release tag. Only vMAJOR.MINOR.PATCH goes to Nexus Mods; prereleases stay on the testing channel."
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          RELEASE="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
+          if [ "$(jq -r '.isDraft or .isPrerelease' <<<"$RELEASE")" = "true" ]; then
+            echo "::error::The GitHub release for ${TAG} is a draft or a prerelease."
+            exit 1
+          fi
+          {
+            echo "version=${VERSION}"
+            echo "name=KCDC-${VERSION}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The one thing "accepted by Services" can mean from here: `stable` serves
+      # this version. Promotion is manual, so a dispatch that runs ahead of it
+      # stops before anything reaches Nexus.
+      - name: Confirm Services serves this version on stable
+        env:
+          KCDC_SERVICES_API_URL: ${{ vars.KCDC_SERVICES_API_URL }}
+          KCDC_SERVICES_MOD_ID: ${{ vars.KCDC_SERVICES_MOD_ID }}
+          MAFIAHUB_BUILD_DOWNLOAD_TOKEN: ${{ secrets.KCDC_BUILD_DOWNLOAD_TOKEN }}
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          : "${KCDC_SERVICES_API_URL:?KCDC_SERVICES_API_URL is not set}"
+          : "${KCDC_SERVICES_MOD_ID:?KCDC_SERVICES_MOD_ID is not set}"
+          : "${MAFIAHUB_BUILD_DOWNLOAD_TOKEN:?KCDC_BUILD_DOWNLOAD_TOKEN is not set}"
+          jq -n --arg modId "$KCDC_SERVICES_MOD_ID" '{
+            query: "query($modId: ID!, $channel: String!) { buildManifest(modId: $modId, channel: $channel) { version files { path sha256 } } }",
+            variables: { modId: $modId, channel: "stable" }
+          }' > request.json
+          RESPONSE="$(curl -fsS "${KCDC_SERVICES_API_URL%/}/graphql" \
+            -H "Content-Type: application/json" \
+            -H "X-MafiaHub-Build-Token: ${MAFIAHUB_BUILD_DOWNLOAD_TOKEN}" \
+            -d @request.json)"
+          if [ "$(jq 'has("errors")' <<<"$RESPONSE")" = "true" ]; then
+            jq -r '.errors[].message' <<<"$RESPONSE" >&2
+            exit 1
+          fi
+          STABLE="$(jq -re '.data.buildManifest.version' <<<"$RESPONSE")"
+          if [ "$STABLE" != "$VERSION" ]; then
+            echo "::error::Services serves ${STABLE} on stable, not ${VERSION}. Promote the release in MafiaHub Services first."
+            exit 1
+          fi
+          jq '.data.buildManifest.files' <<<"$RESPONSE" > stable-files.json
+          echo "stable serves ${STABLE} ($(jq length stable-files.json) files)"
+
+      - name: Download the release zip
+        env:
+          NAME: ${{ steps.identity.outputs.name }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "${NAME}.zip" --dir release
+          unzip -q "release/${NAME}.zip" -d stage
+
+      # The bits Services accepted are the bits Nexus gets. .mafiahub/ is the
+      # installation's stamp, not the build, and is rewritten below anyway.
+      - name: Verify the client matches the stable build
+        env:
+          NAME: ${{ steps.identity.outputs.name }}
+        run: |
+          set -euo pipefail
+          MISMATCHES=0
+          while IFS=$'\t' read -r path sha256; do
+            case "$path" in .mafiahub/*) continue ;; esac
+            file="stage/${NAME}/client/${path}"
+            if [ ! -f "$file" ]; then
+              echo "missing from the release zip: ${path}"
+              MISMATCHES=$((MISMATCHES + 1))
+            elif [ "$(sha256sum "$file" | cut -d' ' -f1)" != "$sha256" ]; then
+              echo "differs from stable: ${path}"
+              MISMATCHES=$((MISMATCHES + 1))
+            fi
+          done < <(jq -r '.[] | [.path, .sha256] | @tsv' stable-files.json)
+          if [ "$MISMATCHES" -ne 0 ]; then
+            echo "::error::${MISMATCHES} client file(s) in the ${TAG} release zip are not the stable build."
+            exit 1
+          fi
+
+      - name: Repackage for Nexus Mods
+        id: package
+        env:
+          NAME: ${{ steps.identity.outputs.name }}
+        run: |
+          set -euo pipefail
+          CLIENT="stage/${NAME}/client"
+          rm -f "${CLIENT}/MafiaHubUpdater.exe"
+          rm -f "${CLIENT}/.mafiahub/channel"
+          mkdir -p "${CLIENT}/.mafiahub"
+          printf 'nexus' > "${CLIENT}/.mafiahub/distribution"
+
+          # release.yml's README tells the player the launcher updates itself.
+          # This download does not, so that paragraph is swapped; a README that
+          # no longer carries it is a README this step does not understand.
+          perl -0pi -e 's/The launcher updates itself on every start.*?has nothing to go on\.\n/This download does not update itself. Get each new version from the\nKingdoms Connected page on Nexus Mods, or let Vortex update it: a server\nrefuses a client older than itself.\n/s' "stage/${NAME}/README.txt"
+          if grep -q 'updates itself on every start' "stage/${NAME}/README.txt"; then
+            echo "::error::README.txt still describes the self-update."
+            exit 1
+          fi
+          if ! grep -q 'does not update itself' "stage/${NAME}/README.txt"; then
+            echo "::error::The self-update paragraph of README.txt was not found; update this step to match release.yml."
+            exit 1
+          fi
+
+          (cd stage && zip -rq "../${NAME}.zip" "${NAME}")
+          echo "zip=${NAME}.zip" >> "$GITHUB_OUTPUT"
+
+      # The hard gate. Whatever the steps above did, an archive carrying the
+      # updater or a channel stamp does not leave this job.
+      - name: Check the Nexus archive
+        env:
+          ZIP: ${{ steps.package.outputs.zip }}
+          NAME: ${{ steps.identity.outputs.name }}
+        run: |
+          set -euo pipefail
+          unzip -Z1 "$ZIP" > contents.txt
+          if grep -i 'mafiahubupdater' contents.txt; then
+            echo "::error::The Nexus archive contains the MafiaHub updater."
+            exit 1
+          fi
+          if grep -E '(^|/)\.mafiahub/channel$' contents.txt; then
+            echo "::error::The Nexus archive carries a build channel; its launcher would patch itself."
+            exit 1
+          fi
+          for required in "${NAME}/client/.mafiahub/distribution" "${NAME}/client/KCDCLauncher.exe" "${NAME}/client/KCDCClient.dll"; do
+            if ! grep -qxF "$required" contents.txt; then
+              echo "::error::The Nexus archive is missing ${required}."
+              exit 1
+            fi
+          done
+          echo "$(wc -l < contents.txt) entries, $(du -h "$ZIP" | cut -f1)"
+
+      - name: Upload to Nexus Mods
+        uses: Nexus-Mods/upload-action@19da5c91527877cd0bfedc6e6239c911035846a0 # v1.0.0-beta.9
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ env.NEXUSMODS_FILE_ID }}
+          filename: ${{ steps.package.outputs.zip }}
+          version: ${{ steps.identity.outputs.version }}
+          display_name: Kingdoms Connected ${{ steps.identity.outputs.version }}
+          description: Kingdoms Connected ${{ steps.identity.outputs.version }}. Unpack anywhere and run client/KCDCLauncher.exe with Steam running.
+          archive_existing_version: true
+          update_mod_version: true

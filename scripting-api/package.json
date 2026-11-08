@@ -1,0 +1,22 @@
+{
+  "name": "@kingdomsconnected/types",
+  "version": "0.0.0",
+  "description": "TypeScript declarations for the Kingdoms Connected scripting API, one entry per side: @kingdomsconnected/types/server and @kingdomsconnected/types/client",
+  "license": "SEE LICENSE IN LICENSE.txt",
+  "keywords": ["kingdoms-connected", "kcd2", "multiplayer", "typescript", "types"],
+  "exports": {
+    "./server": { "types": "./generated/server-api.d.ts" },
+    "./client": { "types": "./generated/client-api.d.ts" },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "server": ["generated/server-api.d.ts"],
+      "client": ["generated/client-api.d.ts"]
+    }
+  },
+  "files": ["shared.d.ts", "generated/server-api.d.ts", "generated/client-api.d.ts", "LICENSE.txt", "NOTICE.txt"],
+  "publishConfig": {
+    "access": "public"
+  }
+}

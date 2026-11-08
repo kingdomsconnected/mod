@@ -1,0 +1,167 @@
+name: Validate default gamemode
+
+# `resources/kcdc-gamemode` is TypeScript and ships as TypeScript: `dist/` is
+# generated, gitignored, and built by whoever deploys the resource. Nothing
+# else, then, would notice a gamemode that no longer compiles until someone
+# tried to deploy it.
+#
+# This compiles both halves and type-checks them against
+# @kingdomsconnected/types, which the repository links to scripting-api/, so a
+# call the resource makes is one the server really exposes, and then checks that
+# the paths its manifest names are the ones that build came out with.
+#
+# A release ships a copy that depends on the published package instead of the
+# link. The last step builds that copy against the package this commit would
+# publish, so a change that breaks only the shipped form fails here rather than
+# at release time.
+
+on:
+  pull_request:
+    paths:
+      - "LICENSE.txt"
+      - "NOTICE.txt"
+      - "ui/LICENSE.txt"
+      - "ui/NOTICE.txt"
+      - "resources/**"
+      - "code/tests/animal_gamemode_ut.cjs"
+      - "code/tests/animal_population_ut.cjs"
+      - "scripting-api/generated/server-api.d.ts"
+      - "scripting-api/generated/client-api.d.ts"
+      - "scripting-api/shared.d.ts"
+      - "scripting-api/package.json"
+      - "scripting-api/LICENSE.txt"
+      - "scripting-api/NOTICE.txt"
+      - "scripting-api/package/**"
+      - "scripts/build_types_package.mjs"
+      - "scripts/test_types_package.py"
+      - "scripts/stage_gamemode_types.mjs"
+      - ".github/workflows/gamemode.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "LICENSE.txt"
+      - "NOTICE.txt"
+      - "ui/LICENSE.txt"
+      - "ui/NOTICE.txt"
+      - "resources/**"
+      - "code/tests/animal_gamemode_ut.cjs"
+      - "code/tests/animal_population_ut.cjs"
+      - "scripting-api/generated/server-api.d.ts"
+      - "scripting-api/generated/client-api.d.ts"
+      - "scripting-api/shared.d.ts"
+      - "scripting-api/package.json"
+      - "scripting-api/LICENSE.txt"
+      - "scripting-api/NOTICE.txt"
+      - "scripting-api/package/**"
+      - "scripts/build_types_package.mjs"
+      - "scripts/test_types_package.py"
+      - "scripts/stage_gamemode_types.mjs"
+      - ".github/workflows/gamemode.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: validate-gamemode-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: resources/kcdc-gamemode
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Install
+        run: npm ci
+
+      - name: Test package notices
+        working-directory: .
+        run: python3 -m unittest discover -s scripts -p test_types_package.py -v
+
+      # `npm run build`, not `tsc --build`: the client half is a second program
+      # under src/client and a bare `tsc --build` compiles only the root one.
+      - name: Compile and type-check
+        run: npm run build
+
+      - name: Test World Builder access command
+        run: node --test tests/builder.test.cjs
+
+      # Run the same fixtures as KCDCTests against the compiled gamemode.
+      - name: Test animal loot, populations, and respawns
+        run: node ../../code/tests/animal_gamemode_ut.cjs "$PWD/dist/server/npc-spawn.js"
+
+      - name: Test food pot commands and recipes
+        run: node --test tests/pots.test.cjs
+
+      - name: Test dice lobbies and playground availability
+        run: node --test tests/dice.test.cjs tests/creator.test.cjs
+
+      - name: Build and test the optional playground
+        working-directory: resources/optional/kcdc-playground
+        run: |
+          npm ci
+          npm test
+
+      - name: Test custom item commands and Read dispatch
+        run: node --test tests/customitems.test.cjs
+
+      # A manifest path that does not resolve is a resource that fails to
+      # start, and nothing else here would notice.
+      - name: Verify the manifest points at files that exist
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const manifest = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            const declared = [
+              ...(manifest.mafiahub.serverScripts ?? []),
+              ...(manifest.mafiahub.clientScripts ?? []),
+              ...(manifest.mafiahub.sharedScripts ?? []),
+            ];
+            if (declared.length === 0) {
+              throw new Error("the manifest declares no scripts");
+            }
+            for (const script of declared) {
+              if (!fs.existsSync(script)) {
+                throw new Error(`the manifest names ${script}, which does not exist`);
+              }
+            }
+            console.log(`${declared.length} declared script(s) resolve.`);
+          '
+
+      # The lockfile refresh is skipped: it resolves the version from npm, where
+      # this commit's package does not exist yet. The package is installed from
+      # a local tarball instead, which is what the lockfile would lock.
+      - name: Build the gamemode as a release ships it
+        working-directory: .
+        run: |
+          set -euo pipefail
+          WORK="${RUNNER_TEMP}/shipped"
+          node scripts/build_types_package.mjs --out "${WORK}/package" --version 0.0.0-ci
+          (cd "${WORK}/package" && npm pack --silent --pack-destination "${WORK}" >/dev/null)
+          rsync -a --exclude node_modules --exclude dist resources/kcdc-gamemode/ "${WORK}/kcdc-gamemode/"
+          node scripts/stage_gamemode_types.mjs --gamemode "${WORK}/kcdc-gamemode" --version 0.0.0-ci --skip-lockfile
+          cd "${WORK}/kcdc-gamemode"
+          node -e '
+            const fs = require("node:fs");
+            const manifest = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            manifest.devDependencies["@kingdomsconnected/types"] = `file:${process.argv[1]}`;
+            fs.writeFileSync("package.json", JSON.stringify(manifest, null, 2));
+          ' "${WORK}/kingdomsconnected-types-0.0.0-ci.tgz"
+          npm install --ignore-scripts
+          npm run build
+          cd "$GITHUB_WORKSPACE"
+          rsync -a --exclude node_modules --exclude dist resources/optional/kcdc-playground/ "${WORK}/kcdc-playground/"
+          node scripts/stage_gamemode_types.mjs --gamemode "${WORK}/kcdc-playground" --version 0.0.0-ci --skip-lockfile
+          cd "${WORK}/kcdc-playground"
+          node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync("package.json", "utf8")); p.devDependencies["@kingdomsconnected/types"] = `file:${process.argv[1]}`; fs.writeFileSync("package.json", JSON.stringify(p, null, 2));' "${WORK}/kingdomsconnected-types-0.0.0-ci.tgz"
+          npm install --ignore-scripts
+          npm test

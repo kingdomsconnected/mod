@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Kingdoms Connected · Playground</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header><div><span class="eyebrow">Kingdoms Connected</span><h1>Playground</h1></div><div class="level" id="level">Connecting…</div><button id="close" class="quiet" aria-label="Close playground">Close <kbd>Esc</kbd></button></header>
+  <div class="layout">
+    <nav aria-label="Playground tools">
+      <span class="eyebrow">Playground tools</span>
+      <button data-tab="items" class="active"><span>I</span> Item spawner</button>
+      <button data-tab="locations"><span>II</span> Locations</button>
+      <button data-tab="crafting"><span>III</span> Crafting</button>
+      <button data-tab="npcs"><span>IV</span> Companions</button>
+      <div class="nav-bottom"><button id="creator">Character creator ↗</button><p>Test tools for this server.<br>Changes affect your character and the shared world.</p></div>
+    </nav>
+    <main>
+      <section id="items" class="page">
+        <div class="heading"><div><span class="eyebrow">INVENTORY TESTING</span><h2>Item spawner</h2></div><span id="item-count" class="badge">— items</span></div>
+        <p class="intro">All equippable items, using their game table names.</p>
+        <div class="filters"><label class="grow">Find an item<input id="search" type="search" placeholder="Search name or item GUID" maxlength="100"></label><label>Category<select id="category"><option value="">All equipment</option></select></label></div>
+        <div class="item-workspace"><div><div id="item-list" class="item-list" role="listbox" aria-label="Equippable items"></div><div class="pagination"><button id="prev" class="quiet">← Previous</button><span id="page-count"></span><button id="next" class="quiet">Next →</button></div></div>
+          <aside class="selection"><span class="eyebrow">SELECTED ITEM</span><h3 id="selected-name">Choose an item</h3><p id="selected-category" class="muted">Select equipment from the list.</p><label>Quality<select id="quality"><option value="1">1</option></select></label><label>Quantity<input id="amount" type="number" min="1" max="20" value="1"></label><fieldset><legend>Spawn destination</legend><label class="radio"><input type="radio" name="destination" value="inventory" checked> In my inventory</label><label class="radio"><input type="radio" name="destination" value="cursor"> At cursor</label></fieldset><p id="cursor-note" class="muted">Aim at nearby ground before opening the panel.</p><button id="spawn-item" class="primary" disabled>Spawn item</button></aside>
+        </div>
+      </section>
+      <section id="locations" class="page" hidden><div class="heading"><div><span class="eyebrow">EXPLORE THE LEVEL</span><h2>Locations</h2></div></div><p class="intro">Only destinations in the level this server is running.</p><div class="filters"><label class="grow">Find a location<input id="location-search" type="search" placeholder="Settlement, landmark or trader"></label><button id="dice" class="primary">Nearest free dice table ↗</button></div><div id="location-list" class="location-list"></div></section>
+      <section id="crafting" class="page" hidden><div class="heading"><div><span class="eyebrow">CRAFTING TESTING</span><h2>Crafting</h2></div></div><p class="intro">Learn recipe unlocks and grant ingredients. Craft at a normal station; skill requirements still apply.</p><div class="filters"><label>Discipline<select id="craft-kind"><option value="smithing">Blacksmithing</option><option value="alchemy">Alchemy</option></select></label><label class="grow">Recipe<select id="recipe"><option value="all">All enabled recipes</option></select></label></div><div class="craft-grid"><article class="card"><span class="eyebrow">KNOWLEDGE</span><h3>Learn the recipe</h3><p>Unlock the selected recipe, or every listed recipe. Existing knowledge is kept.</p><button id="learn" class="primary">Learn recipes</button></article><article class="card"><span class="eyebrow">MATERIALS</span><h3>Stock your inventory</h3><p id="ingredient-summary">Ingredients for one craft of each selected recipe.</p><label>Batches<input id="rounds" type="number" min="1" max="10" value="1"></label><button id="materials" class="primary">Give materials</button></article></div><p class="muted">Recipes requiring quest items are excluded. No skill levels or unrelated perks are granted.</p></section>
+      <section id="npcs" class="page" hidden><div class="heading"><div><span class="eyebrow">COMPANION TESTING</span><h2>Companions</h2></div></div><p class="intro">Spawn on nearby ground in front of you. Other players in your world can see them.</p><div class="companion-grid"><article class="card"><span class="eyebrow">SERVER NPC</span><h3>Test NPC</h3><label>Test character<select id="role"></select></label><label class="radio"><input id="follow" type="checkbox" checked> Follow me</label><button id="spawn-npc" class="primary">Spawn NPC</button><p class="muted">Up to four per player.</p></article><article class="card"><span class="eyebrow">YOUR COMPANIONS</span><h3>Horse &amp; dog</h3><p>The horse belongs to you. The dog follows you using its companion behavior.</p><button id="spawn-horse" class="primary">Spawn my horse</button><button id="spawn-dog">Spawn my dog</button><p class="muted">An existing horse or dog is kept.</p></article></div><div class="cleanup"><div><h3>Finished testing?</h3><p>Remove your playground companions and ground drops. Keep inventory items.</p></div><button id="clear">Remove my test spawns</button></div></section>
+    </main>
+  </div>
+  <footer><span class="status-dot"></span><span id="status" role="status" aria-live="polite">Waiting for the server…</span></footer>
+  <script src="app.js"></script>
+</body>
+</html>

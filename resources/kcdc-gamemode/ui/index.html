@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kingdoms Connected &mdash; Debug</title>
+<style>
+    :root {
+        --bg:      #141109;
+        --surface: #1c1811;
+        --line:    #352c1e;
+        --text:    #e8dfc9;
+        --dim:     #9a8c72;
+        --faint:   #6b5f4a;
+        --gold:    #c9a227;
+        --low:     #a8402f;
+
+        --serif: "Palatino Linotype", "Book Antiqua", Georgia, serif;
+        --mono: Consolas, "Cascadia Mono", ui-monospace, monospace;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; }
+
+    body {
+        display: flex;
+        flex-direction: column;
+        font: 13px/1.5 var(--serif);
+        color: var(--text);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        user-select: none;
+        overflow: hidden;
+    }
+
+    header {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        padding: 12px 18px;
+        border-bottom: 1px solid var(--line);
+    }
+    h1 { font: 16px/1 var(--serif); letter-spacing: .1em; text-transform: uppercase; }
+    .tag { font: 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--gold); }
+    #status { margin-left: auto; font: 11px/1 var(--mono); color: var(--faint); }
+
+    nav { display: flex; padding: 0 12px; border-bottom: 1px solid var(--line); }
+    nav button {
+        font: 11px/1 var(--serif);
+        letter-spacing: .12em;
+        text-transform: uppercase;
+        color: var(--faint);
+        background: none;
+        border: 0;
+        border-bottom: 1px solid transparent;
+        margin-bottom: -1px;
+        padding: 10px 14px;
+        cursor: pointer;
+    }
+    nav button:hover { color: var(--dim); }
+    nav button.active { color: var(--gold); border-bottom-color: var(--gold); }
+
+    main { flex: 1; position: relative; }
+    section { position: absolute; inset: 0; display: none; overflow-y: auto; padding: 16px 18px 20px; }
+    section.active { display: block; }
+
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-thumb { background: var(--line); }
+
+    h2 {
+        margin: 18px 0 8px;
+        font: 10px/1 var(--serif);
+        letter-spacing: .16em;
+        text-transform: uppercase;
+        color: var(--gold);
+    }
+    h2:first-child { margin-top: 0; }
+
+    p.note { margin-top: 8px; font-size: 12px; color: var(--faint); }
+    code { font: 12px var(--mono); }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); column-gap: 24px; }
+    .grid div { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; border-bottom: 1px solid var(--surface); }
+    .grid span { color: var(--dim); }
+    .grid b { font: 12px var(--mono); font-weight: 400; text-align: right; }
+    .grid b.weak { color: var(--faint); }
+
+    .bars { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 24px; }
+    .bar > div { display: flex; justify-content: space-between; font-size: 12px; color: var(--dim); }
+    .bar b { font: 12px var(--mono); font-weight: 400; color: var(--text); }
+    .bar i { display: block; height: 4px; margin-top: 4px; background: var(--surface); }
+    .bar i > i { margin-top: 0; background: var(--gold); }
+    .bar.low i > i { background: var(--low); }
+
+    .rows > div { display: flex; align-items: center; gap: 14px; padding: 6px 0; border-bottom: 1px solid var(--surface); }
+    .rows .name { flex: 0 0 180px; }
+    .rows .name code { color: var(--gold); }
+    .rows .what { flex: 1; min-width: 0; font-size: 12px; color: var(--dim); }
+    .rows .tail { font: 12px var(--mono); color: var(--faint); }
+    .rows .you { color: var(--gold); }
+    .empty { padding: 6px 0; color: var(--faint); }
+
+    button.plate, footer button {
+        font: 11px/1 var(--serif);
+        letter-spacing: .08em;
+        color: var(--dim);
+        background: none;
+        border: 1px solid var(--line);
+        padding: 6px 10px;
+        cursor: pointer;
+    }
+    button.plate:hover, footer button:hover { color: var(--gold); border-color: var(--gold); }
+    button.plate.on { color: var(--bg); background: var(--gold); border-color: var(--gold); }
+    .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+
+    .cmdbox { display: flex; gap: 6px; }
+    .cmdbox input {
+        flex: 1;
+        font: 13px var(--mono);
+        color: var(--text);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        padding: 7px 10px;
+        outline: none;
+        user-select: text;
+    }
+    .cmdbox input:focus { border-color: var(--gold); }
+    .cmdbox input::placeholder { color: var(--faint); }
+
+    pre {
+        font: 12px/1.6 var(--mono);
+        color: var(--dim);
+        background: var(--surface);
+        padding: 10px 12px;
+        max-height: 300px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        user-select: text;
+    }
+
+    footer {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 18px;
+        border-top: 1px solid var(--line);
+        font: 11px var(--mono);
+        color: var(--faint);
+    }
+    #hint { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+    <header>
+        <h1>Kingdoms Connected</h1>
+        <span class="tag">Debug</span>
+        <span id="status">awaiting the client script</span>
+    </header>
+
+    <nav>
+        <button data-tab="retinue" class="active">Retinue</button>
+        <button data-tab="realm">Realm</button>
+        <button data-tab="company">Company</button>
+        <button data-tab="ledger">Ledger</button>
+        <button data-tab="chronicle">Chronicle</button>
+    </nav>
+
+    <main>
+        <section id="tab-retinue" class="active">
+            <h2>Condition</h2>
+            <div class="bars" id="bars"></div>
+
+            <h2>Body</h2>
+            <div class="grid" id="body"></div>
+
+            <h2>Attributes and skills</h2>
+            <div class="grid" id="stats"></div>
+
+            <h2>Carried and worn</h2>
+            <div class="grid" id="carried"></div>
+
+            <h2>Afflictions and boons</h2>
+            <div class="rows" id="buffs"></div>
+        </section>
+
+        <section id="tab-realm">
+            <h2>The hour</h2>
+            <div class="grid" id="clock"></div>
+            <div class="actions" id="clock-actions"></div>
+
+            <h2>The sky</h2>
+            <div class="grid" id="sky"></div>
+            <div class="actions" id="sky-actions"></div>
+            <p class="note">Presets are loaded by the level, so blend to one by name: <code>/world weather &lt;preset&gt;</code>.</p>
+
+            <h2>Spawned by this server</h2>
+            <div class="grid" id="spawned"></div>
+        </section>
+
+        <section id="tab-company">
+            <h2>Connected</h2>
+            <div class="rows" id="roster"></div>
+        </section>
+
+        <section id="tab-ledger">
+            <h2>Speak a command</h2>
+            <div class="cmdbox">
+                <input id="line" type="text" spellcheck="false" autocomplete="off" placeholder="/help">
+                <button class="plate" id="say">Send</button>
+            </div>
+            <p class="note">Sent as an ordinary chat line, so a command that refuses you at the chat box refuses you here.</p>
+
+            <h2>What this server answers</h2>
+            <div class="rows" id="commands"></div>
+        </section>
+
+        <section id="tab-chronicle">
+            <h2>Switches on this machine only</h2>
+            <div class="rows" id="switches"></div>
+
+            <h2>Log</h2>
+            <pre id="log">nothing yet</pre>
+        </section>
+    </main>
+
+    <footer>
+        <span id="hint">Not connected to a client script.</span>
+        <button id="blur">Hand back input</button>
+        <button id="close">Close</button>
+    </footer>
+
+<script>
+"use strict";
+
+/* page -> client. Guarded so the page also opens in a plain browser. */
+const send = (name, payload) => {
+    if (typeof callEvent === "function") {
+        callEvent(name, payload === undefined ? null : JSON.stringify(payload));
+    }
+};
+
+/* The client sizes this view at 1040x680 on a 1080p screen and multiplies that on larger ones; zoom by the same factor so text and spacing grow with it. */
+const fitZoom = () => {
+    document.documentElement.style.zoom = String(Math.max(1, Math.min(window.innerWidth / 1040, window.innerHeight / 680)));
+};
+fitZoom();
+window.addEventListener("resize", fitZoom);
+
+const $ = (id) => document.getElementById(id);
+const el = (tag, className, text) => {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+};
+
+const num = (value, digits) => (typeof value === "number" && isFinite(value) ? value.toFixed(digits === undefined ? 0 : digits) : "--");
+const yes = (value) => (value ? "yes" : "no");
+const mannequin = (value) => (value === 255 || value === undefined ? "unset" : String(value));
+const capital = (text) => text.charAt(0).toUpperCase() + text.slice(1);
+
+let body = null;
+let realm = null;
+
+function cell(host, label, value, weak) {
+    const row = el("div");
+    row.appendChild(el("span", null, label));
+    row.appendChild(el("b", weak ? "weak" : null, value));
+    host.appendChild(row);
+}
+
+function bar(host, label, pair) {
+    const value = Array.isArray(pair) ? pair[0] : 0;
+    const maximum = Array.isArray(pair) ? pair[1] : 0;
+    const share = maximum > 0 ? Math.max(0, Math.min(1, value / maximum)) : 0;
+
+    const box = el("div", "bar" + (share < 0.25 ? " low" : ""));
+    const top = el("div");
+    top.appendChild(el("span", null, label));
+    top.appendChild(el("b", null, maximum > 0 ? num(value) + " / " + num(maximum) : "--"));
+
+    const groove = el("i");
+    const fill = el("i");
+    fill.style.width = (share * 100).toFixed(1) + "%";
+    groove.appendChild(fill);
+
+    box.appendChild(top);
+    box.appendChild(groove);
+    host.appendChild(box);
+}
+
+function drawBody() {
+    const bars = $("bars");
+    const vitals = $("body");
+    const stats = $("stats");
+    const carried = $("carried");
+    const buffs = $("buffs");
+    [bars, vitals, stats, carried, buffs].forEach((host) => (host.textContent = ""));
+
+    if (!body) {
+        bars.appendChild(el("p", "empty", "No body at this machine. One appears when the session spawns it."));
+        return;
+    }
+
+    bar(bars, "Health", body.health);
+    bar(bars, "Stamina", body.stamina);
+    bar(bars, "Nourishment", body.hunger);
+    bar(bars, "Tiredness", body.exhaust);
+
+    cell(vitals, "Name", body.nickname || "--");
+    cell(vitals, "Slot", "#" + body.slot);
+    cell(vitals, "Engine entity", body.entity ? String(body.entity) : "none", !body.entity);
+    cell(vitals, "Spawned", yes(body.ready));
+    cell(vitals, "Alive", yes(body.alive));
+    cell(vitals, "Can act", yes(body.canAct));
+    cell(vitals, "Position", num(body.position.x, 1) + ", " + num(body.position.y, 1) + ", " + num(body.position.z, 1));
+    cell(vitals, "Speed", num(body.speed, 2) + " m/s");
+    cell(vitals, "Off the ground", yes(body.inAir));
+    cell(vitals, "In the saddle", body.mounted ? "horse " + body.horse : "no");
+    cell(vitals, "Bleeding", num(body.bleeding, 2), body.bleeding === 0);
+    cell(vitals, "Consciousness", num(body.consciousness, 2));
+    cell(vitals, "Drunkenness", num(body.drunkenness, 2), body.drunkenness === 0);
+    cell(vitals, "Poisoning", num(body.poisoning, 2), body.poisoning === 0);
+    cell(vitals, "Pace / direction tag", mannequin(body.tags.pace) + " / " + mannequin(body.tags.direction), true);
+    cell(vitals, "Stance / physics tag", mannequin(body.tags.stance) + " / " + mannequin(body.tags.physics), true);
+
+    Object.keys(body.stats).forEach((name) => cell(stats, capital(name), num(body.stats[name], 1)));
+    Object.keys(body.skills).forEach((name) => cell(stats, capital(name), num(body.skills[name], 1)));
+
+    cell(carried, "Right hand", body.hands.right || "empty", !body.hands.right);
+    cell(carried, "Left hand", body.hands.left || "empty", !body.hands.left);
+    cell(carried, "Worn pieces", String(body.worn));
+
+    if (body.buffs.length === 0) {
+        buffs.appendChild(el("p", "empty", "Nothing on this body."));
+        return;
+    }
+    body.buffs.forEach((buff) => {
+        const row = el("div");
+        const name = el("div", "name");
+        name.appendChild(el("code", null, buff.name));
+        row.appendChild(name);
+        row.appendChild(el("div", "what", buff.kind + (buff.source === "server" ? ", from this server" : ", the game's own")));
+        row.appendChild(el("div", "tail", buff.left === null ? "no end" : num(buff.left) + "s left"));
+        buffs.appendChild(row);
+    });
+}
+
+function drawRealm() {
+    const clock = $("clock");
+    const sky = $("sky");
+    const spawned = $("spawned");
+    const commands = $("commands");
+    [clock, sky, spawned, commands].forEach((host) => (host.textContent = ""));
+
+    if (!realm) {
+        clock.appendChild(el("p", "empty", "Waiting for the server."));
+        commands.appendChild(el("p", "empty", "Waiting for the server."));
+        return;
+    }
+
+    const world = realm.world;
+    const hour = Math.floor(world.hour);
+    const minute = Math.floor((world.hour - hour) * 60);
+    cell(clock, "Day", String(world.day));
+    cell(clock, "Hour", String(hour).padStart(2, "0") + ":" + String(minute).padStart(2, "0"));
+    cell(clock, "Time scale", num(world.timeScale, 2) + "x");
+
+    cell(sky, "Preset", world.weather || "--");
+    cell(sky, "Blending", world.blending ? "from " + world.previousWeather + ", " + num(world.blendRemaining) + "s left" : "settled", !world.blending);
+    cell(sky, "Rain", num(world.rainIntensity, 2) + " (amount " + num(world.rainAmount, 2) + ")");
+    cell(sky, "Wetness", num(world.wetness, 2));
+    cell(sky, "Puddles", num(world.puddles, 2));
+
+    Object.keys(realm.spawned).forEach((name) => cell(spawned, capital(name), String(realm.spawned[name])));
+
+    realm.commands.forEach((entry) => {
+        const row = el("div");
+        const name = el("div", "name");
+        name.appendChild(el("code", null, "/" + entry.name));
+        row.appendChild(name);
+        row.appendChild(el("div", "what", entry.summary));
+
+        const fill = el("button", "plate", "Usage");
+        fill.onclick = () => {
+            $("line").value = entry.usage[0] || "/" + entry.name;
+            $("line").focus();
+        };
+        row.appendChild(fill);
+        commands.appendChild(row);
+    });
+}
+
+/** Redrawn with every body sample rather than every poll, because the distances move. */
+function drawRoster() {
+    const roster = $("roster");
+    roster.textContent = "";
+
+    if (!realm) {
+        roster.appendChild(el("p", "empty", "Waiting for the server."));
+        return;
+    }
+
+    realm.players.forEach((player) => {
+        const mine = body !== null && player.slot === body.slot;
+        const row = el("div");
+        row.appendChild(el("div", mine ? "name you" : "name", player.nickname || "(unnamed)"));
+
+        const what = ["#" + player.slot, player.alive ? num(player.healthPercent) + "% health" : "down"];
+        if (player.mounted) what.push("mounted");
+        if (!player.ready) what.push("not spawned yet");
+        row.appendChild(el("div", "what", what.join(", ")));
+
+        if (player.position && body && !mine) {
+            const dx = player.position.x - body.position.x;
+            const dy = player.position.y - body.position.y;
+            const dz = player.position.z - body.position.z;
+            row.appendChild(el("div", "tail", num(Math.sqrt(dx * dx + dy * dy + dz * dz)) + " m"));
+
+            const ride = el("button", "plate", "Ride to");
+            ride.onclick = () => command("/tp " + player.nickname);
+            row.appendChild(ride);
+        }
+        roster.appendChild(row);
+    });
+}
+
+function drawSwitches(rows) {
+    const host = $("switches");
+    host.textContent = "";
+    rows.forEach((entry) => {
+        const row = el("div");
+        row.appendChild(el("div", "name", entry.label));
+        row.appendChild(el("div", "what", entry.hint));
+
+        const plate = el("button", "plate" + (entry.on ? " on" : ""), entry.on ? "On" : "Off");
+        plate.onclick = () => send("panel:switch", { name: entry.name });
+        row.appendChild(plate);
+        host.appendChild(row);
+    });
+}
+
+function command(line) {
+    send("panel:command", { line: line });
+}
+
+function plates(host, entries) {
+    entries.forEach((entry) => {
+        const plate = el("button", "plate", entry[0]);
+        plate.onclick = () => command(entry[1]);
+        host.appendChild(plate);
+    });
+}
+
+plates($("clock-actions"), [
+    ["Dawn", "/world hour 5"],
+    ["Noon", "/world hour 12"],
+    ["Dusk", "/world hour 19"],
+    ["Midnight", "/world hour 23.5"],
+    ["1x", "/world scale 1"],
+    ["10x", "/world scale 10"],
+    ["60x", "/world scale 60"],
+]);
+
+plates($("sky-actions"), [
+    ["Dry", "/world rain 0"],
+    ["Drizzle", "/world rain 0.3"],
+    ["Downpour", "/world rain 1"],
+]);
+
+document.querySelectorAll("nav button").forEach((button) => {
+    button.onclick = () => {
+        document.querySelectorAll("nav button").forEach((other) => other.classList.remove("active"));
+        document.querySelectorAll("section").forEach((panel) => panel.classList.remove("active"));
+        button.classList.add("active");
+        $("tab-" + button.dataset.tab).classList.add("active");
+        send("panel:refresh");
+    };
+});
+
+$("close").onclick = () => send("panel:close");
+$("blur").onclick = () => send("panel:blur");
+$("say").onclick = () => {
+    const input = $("line");
+    if (input.value.trim().length > 0) {
+        command(input.value);
+        input.value = "";
+    }
+};
+$("line").onkeydown = (event) => {
+    if (event.key === "Enter") {
+        $("say").onclick();
+    }
+};
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+        send("panel:blur");
+    }
+});
+
+/* client -> page, as CustomEvents on this window. */
+
+window.addEventListener("panel:init", (event) => {
+    const detail = event.detail || {};
+    $("status").textContent = "view " + detail.view + (detail.screen ? ", " + detail.screen.width + "x" + detail.screen.height : "");
+    $("hint").textContent = detail.key + " opens and closes this panel, except while it holds the keyboard. " + detail.page;
+});
+
+window.addEventListener("panel:self", (event) => {
+    body = event.detail || null;
+    drawBody();
+    drawRoster();
+});
+
+window.addEventListener("panel:realm", (event) => {
+    realm = event.detail || null;
+    drawRealm();
+    drawRoster();
+});
+
+window.addEventListener("panel:switches", (event) => {
+    drawSwitches(event.detail || []);
+});
+
+window.addEventListener("panel:log", (event) => {
+    const lines = event.detail || [];
+    const log = $("log");
+    log.textContent = lines.length > 0 ? lines.join("\n") : "nothing yet";
+    log.scrollTop = log.scrollHeight;
+});
+
+drawBody();
+drawRealm();
+drawRoster();
+
+send("panel:ready");
+</script>
+</body>
+</html>

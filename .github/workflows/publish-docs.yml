@@ -1,0 +1,109 @@
+name: Publish scripting API contract
+
+# Tag-driven like the release itself. Contracts always enter testing; promoting
+# the matching build advances the build and contract stable pointers together.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-scripting-contract-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      KCDC_SERVICES_API_URL: ${{ vars.KCDC_SERVICES_API_URL }}
+      KCDC_SERVICES_MOD_ID: ${{ vars.KCDC_SERVICES_MOD_ID }}
+      MAFIAHUB_DOCS_UPLOAD_TOKEN: ${{ secrets.KCDC_DOCS_UPLOAD_TOKEN }}
+      # Optional override. Unset falls back to scripting-api/services-cli.version, which is what
+      # a local run uses, so CI and a developer's machine cannot generate with different tools.
+      MAFIAHUB_SERVICES_CLI_VERSION: ${{ vars.MAFIAHUB_SERVICES_CLI_VERSION }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve contract identity
+        id: identity
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "::error::This workflow only runs on a tag. Dispatch it with the tag selected as the ref."
+            exit 1
+          fi
+
+          TAG="${GITHUB_REF_NAME}"
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag '${TAG}' is not a release tag. Expected vMAJOR.MINOR.PATCH or vMAJOR.MINOR.PATCH-prerelease."
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          CORE="${VERSION%%-*}"
+
+          FILE_VERSION="$(tr -d ' \t\r\n' < VERSION)"
+          if [ "$FILE_VERSION" != "$CORE" ]; then
+            echo "::error::VERSION file says '${FILE_VERSION}' but tag '${TAG}' means '${CORE}'."
+            exit 1
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Publishing the ${VERSION} contract to docs-contract-testing"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.4.1 --activate
+
+      # Deliberately without --skip-missing: a publish must carry every target, and a missing
+      # client-api.json means nobody has run a debug client since the bindings last changed.
+      - name: Build authoritative contract
+        run: node scripts/build_scripting_contract.mjs --out build/scripting-contract
+
+      - name: Fail on stale committed declarations
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet -- scripting-api/generated; then
+            echo "::error::The committed declarations do not match the committed metadata. Run scripts/build_scripting_contract.mjs and commit scripting-api/generated."
+            git --no-pager diff --stat -- scripting-api/generated
+            exit 1
+          fi
+
+      - name: Publish immutable contract
+        id: publish
+        shell: bash
+        env:
+          VERSION: ${{ steps.identity.outputs.version }}
+        run: |
+          set -euo pipefail
+          : "${KCDC_SERVICES_API_URL:?KCDC_SERVICES_API_URL is not set}"
+          : "${KCDC_SERVICES_MOD_ID:?KCDC_SERVICES_MOD_ID is not set}"
+          : "${MAFIAHUB_DOCS_UPLOAD_TOKEN:?KCDC_DOCS_UPLOAD_TOKEN is not set}"
+          CLI_VERSION="${MAFIAHUB_SERVICES_CLI_VERSION:-$(tr -d ' \t\r\n' < scripting-api/services-cli.version)}"
+          RESULT="$(pnpm --silent dlx "@mafiahub/services-cli@${CLI_VERSION}" builds publish \
+            --api-url "${KCDC_SERVICES_API_URL}" \
+            --mod-id "${KCDC_SERVICES_MOD_ID}" \
+            --channel docs-contract-testing \
+            --version "${VERSION}" \
+            --root build/scripting-contract \
+            --token "${MAFIAHUB_DOCS_UPLOAD_TOKEN}" \
+            --metadata artifact=scripting-api-contract \
+            --metadata tag="${GITHUB_REF_NAME}" \
+            --metadata source_revision="${GITHUB_SHA}" \
+            --metadata release_revision="${GITHUB_SHA}" \
+            --json)"
+          CONTRACT_REVISION="$(RESULT="${RESULT}" node --input-type=module -e '
+            const result = JSON.parse(process.env.RESULT);
+            if (!/^[a-f0-9]{64}$/.test(result.manifestHash ?? "")) throw new Error("Services did not return a contract revision");
+            console.log(result.manifestHash);
+          ')"
+          echo "Published contract revision ${CONTRACT_REVISION}"
