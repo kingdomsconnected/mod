@@ -44,7 +44,8 @@
 
 namespace KCDC::Core::StreamedAssets {
     namespace {
-        // CryPak flags: FLAGS_PATH_REAL, and FLAGS_OVERRIDE_PAK for the replace lane.
+        // CryPak flags: FLAGS_PATH_REAL, and FLAGS_OVERRIDE_PAK for the lanes that replace the game's
+        // files, as the game mounts an installed mod's paks.
         constexpr unsigned int kMountFlags         = 0x10000u;
         constexpr unsigned int kOverrideMountFlags = 0x10400u;
 
@@ -235,6 +236,26 @@ namespace KCDC::Core::StreamedAssets {
         const auto existing         = _mounted.find(path);
         const bool replaceLane      = pak.info.lane == KCDC::Shared::StreamedAssets::kLaneReplace;
         const bool localizationLane = pak.info.lane == KCDC::Shared::StreamedAssets::kLaneLocalization;
+        const bool levelLane        = pak.info.lane == KCDC::Shared::StreamedAssets::kLaneLevel;
+        if (levelLane) {
+            // The level already read these files; swapping them under it would mix two worlds.
+            if (!joining) {
+                Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->warn("'{}' changed its level edits mid-session; they apply from the next join", pak.resource);
+                return true;
+            }
+            if (existing == _mounted.end()) {
+                for (const Framework::Utils::StreamedAssets::PakEntry &entry : entries) {
+                    if (!KCDC::Shared::StreamedAssets::Policy::IsLevelEntityXml(entry.path)) {
+                        continue;
+                    }
+                    const std::string xml = ReadEntry(path, entry.path);
+                    if (xml.empty() || KCDC::Shared::StreamedAssets::Policy::LevelXmlRunsScript(xml)) {
+                        Fail("A streamed pak from '" + pak.resource + "' was refused: its level data runs a script or cannot be read");
+                        return false;
+                    }
+                }
+            }
+        }
         if (existing != _mounted.end()) {
             if (!existing->second.accessible && !cryPak->SetPackAccessible(true, path.c_str(), kMountFlags)) {
                 Fail("Cannot re-enable a streamed pak from '" + pak.resource + "'");
@@ -246,7 +267,7 @@ namespace KCDC::Core::StreamedAssets {
             // String patches bind where the game binds an installed mod's localization pak; both
             // override lanes win over whatever the game mounted at the same paths.
             const char *bindRoot = localizationLane ? kLocalizationRoot : cryPak->GetGameFolder();
-            if (!cryPak->MountArchive(bindRoot, path.c_str(), replaceLane || localizationLane ? kOverrideMountFlags : kMountFlags)) {
+            if (!cryPak->MountArchive(bindRoot, path.c_str(), replaceLane || localizationLane || levelLane ? kOverrideMountFlags : kMountFlags)) {
                 Fail("Cannot mount a streamed pak from '" + pak.resource + "'");
                 return false;
             }

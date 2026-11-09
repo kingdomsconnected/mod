@@ -81,7 +81,7 @@ one such file.
 | String patches `<file>__<id>.xml`                    | `localization/<language>/`    | Mounted at the game's `Localization` root and merged by the game's own mod-patch loader; the language in use wins, English is the fallback. Retired patches are undone by reading the stock file again                                                        |
 | `scripts/mods/*.lua`, `mod.cfg`                      | --                            | Refused: a server never runs Lua or sets console variables                                                                                                                                                                                                    |
 | `data/quests/<id>.xml`, `libs/storm/storm__<id>.xml` | --                            | Refused: the game merges them only at boot                                                                                                                                                                                                                    |
-| Level edits (`modifies_level`)                       | --                            | Not supported; the game cannot merge them                                                                                                                                                                                                                     |
+| Level edits, `data/levels/<level>/*.pak`             | `level/levels/<level>/`       | Mounted over the game's level files before the level loads, each file replacing the game's whole. See [Level edits](#level-edits)                                                                                                                             |
 
 A table can only be patched, never replaced whole, and a patch's `<id>` is
 lowercase letters, digits and `_`, as the game's mod ids are.
@@ -122,6 +122,39 @@ finds patches through CryPak's file listing, which still lists a disabled pak,
 and fails a whole table on a listed file it cannot read. One that `ClosePack`
 refuses stays readable, its patches in use, until a later level edge closes it.
 String patches apply as soon as their pak is mounted, mid-session included.
+
+### Level edits
+
+A resource's `level/` folder changes the level itself: terrain, navigation,
+physics, far-view meshes, the level's object list and its daily schedule.
+
+```
+resources/<resource>/
+  level/
+    levels/<level>/
+      terrain/terrain.dat
+      recast/rdnavmesh_1.nav
+      objects_mission0.xml
+```
+
+It takes these files inside `levels/<level>/`, and nothing else:
+
+| Where           | Files                                                |
+| --------------- | ---------------------------------------------------- |
+| The folder root | `objects_*.xml`, `mission_*.xml`, `occluder.ocm`, `whdata_<n>` |
+| `tables/ai/`    | `scheduler.xml`                                      |
+| `terrain/ physics/ recast/ hlods/ cestool/ brush/ layers/` | `.dat .lst .ctc .xml .cgf .cgfm .hdr .nav` |
+
+A level's info and data files stay closed, because they name a script the
+load runs. Entity XML (`objects_*.xml`, `mission_*.xml`, `layers/*.xml`) is
+refused if a trigger or flow node in it carries a script command; the server
+leaves such a file out, and a client refuses a pak that still has one.
+
+Each file replaces the game's whole file, so two resources shipping the same
+file do not combine, and a game update that changes it can leave the edit
+stale. A level edit applies from the next join: one changed while players are
+connected waits, because the level has already read its files. These files
+are large, so expect a download prompt.
 
 ### Content rules the engine sets
 

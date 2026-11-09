@@ -74,6 +74,21 @@ namespace {
         Require(!Accepts(localization, "english/text_ui_items.xml") && !Accepts(localization, "text_ui_items__x.xml") && !Accepts(localization, "english/sub/text__x.xml") && !Accepts(localization, "english2/text__x.xml"), "localization takes only patches, one language folder deep");
         Require(KCDC::Shared::StreamedAssets::Policy::LanguageOf("english/text_ui_items__my_mod.xml") == "english" && KCDC::Shared::StreamedAssets::Policy::PatchedFileOf("english/text_ui_items__my_mod.xml") == "text_ui_items.xml", "a patch names its language and the file it merges into");
 
+        const char *level = KCDC::Shared::StreamedAssets::kLaneLevel;
+        Require(Accepts(level, "Levels/Kutnohorsko/terrain/terrain.dat", &normalized) && normalized == "levels/kutnohorsko/terrain/terrain.dat", "terrain rides the level lane");
+        Require(Accepts(level, "levels/kutnohorsko/whdata_0") && Accepts(level, "levels/kutnohorsko/occluder.ocm") && Accepts(level, "levels/kutnohorsko/objects_mission0.xml"), "the level's own root files, whdata without an extension");
+        Require(Accepts(level, "levels/kutnohorsko/recast/rdnavmesh_1.nav") && Accepts(level, "levels/kutnohorsko/physics/layer0.dat") && Accepts(level, "levels/kutnohorsko/hlods/main/a/b.cgf") && Accepts(level, "levels/kutnohorsko/tables/ai/scheduler.xml"), "navigation, physics, far-view meshes and the schedule");
+        Require(!Accepts(level, "levels/kutnohorsko/levelinfo.xml") && !Accepts(level, "levels/kutnohorsko/leveldata.xml") && !Accepts(level, "levels/kutnohorsko/moviedata.xml"), "level metadata stays closed: it names a script the load runs");
+        Require(!Accepts(level, "levels/kutnohorsko/terrain/x.lua") && !Accepts(level, "levels/kutnohorsko/tables/ai/other.xml") && !Accepts(level, "levels/kutnohorsko/occluder.ocm.bak_v70") && !Accepts(level, "levels/kutnohorsko/whdata_x"), "only the level's own kinds of file");
+        Require(!Accepts(level, "objects/manmade/x.cgf") && !Accepts(level, "levels/x.cgf") && !Accepts(level, "levels/../scripts/terrain/x.dat") && !Accepts(level, "levels/a.b/terrain/x.dat"), "a level edit stays inside one level's folder");
+        Require(!Accepts(replace, "levels/kutnohorsko/whdata_0") && !Accepts(stream, "levels/kutnohorsko/terrain/terrain.dat"), "no other lane reaches a level");
+
+        Require(KCDC::Shared::StreamedAssets::Policy::IsLevelEntityXml("levels/kutnohorsko/objects_mission0.xml") && KCDC::Shared::StreamedAssets::Policy::IsLevelEntityXml("levels/kutnohorsko/layers/a.xml") && !KCDC::Shared::StreamedAssets::Policy::IsLevelEntityXml("levels/kutnohorsko/tables/ai/scheduler.xml"), "entity XML is recognised by place");
+        Require(!KCDC::Shared::StreamedAssets::Policy::LevelXmlRunsScript("<Entity EntityClass=\"AreaTrigger\"><Properties ScriptCommand=\"\"/></Entity>"), "an empty command runs nothing");
+        Require(KCDC::Shared::StreamedAssets::Policy::LevelXmlRunsScript("<Properties ScriptCommand=\"System.Quit()\"/>") && KCDC::Shared::StreamedAssets::Policy::LevelXmlRunsScript("<Properties scriptcommand='x'/>") && KCDC::Shared::StreamedAssets::Policy::LevelXmlRunsScript("<Properties QuestScriptCommand=\"x\"/>"), "a trigger's command is a script");
+        Require(KCDC::Shared::StreamedAssets::Policy::LevelXmlRunsScript("<Node Class=\"advanced:ScriptCommand\"/>") && KCDC::Shared::StreamedAssets::Policy::LevelXmlRunsScript("<Node Class=\"advanced:&#83;criptCommand\"/>"), "a flow node cannot name or spell the command node");
+        Require(!KCDC::Shared::StreamedAssets::Policy::LevelXmlRunsScript("<Node Class=\"Audio:Rtpc\"/><Entity EntityClass=\"SmartObjectHolder\"/>"), "ordinary nodes and entities pass");
+
         Require(Policy().PrefersStore("textures/kcdc/demo/a.dds.2") && Policy().PrefersStore("sounds/kcdc/demo/a.ogg") && Policy().PrefersStore("sounds/fmod/build/pc/kcdc_demo_music.bank") && !Policy().PrefersStore("objects/kcdc/demo/a.mtl"), "streamed and compressed kinds are stored");
 
         Require(KCDC::Shared::StreamedAssets::Policy::IsAudioControls("sounds/kcdc/demo/atl/controls.xml") && !KCDC::Shared::StreamedAssets::Policy::IsAudioControls("sounds/kcdc/demo/controls.xml"), "ATL controls are recognised by place");
