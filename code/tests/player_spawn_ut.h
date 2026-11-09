@@ -7,6 +7,12 @@
 #include <mafianet/bit_stream.h>
 
 #include <limits>
+#include <memory>
+
+class PlayerSpawnTestEntity final: public Framework::Networking::Replication::NetworkEntity {
+  public:
+    static constexpr const char *kTypeName = "KCDC::PlayerSpawnTest";
+};
 
 MODULE(player_spawn_protocol, {
     IT("finds the downloaded owner before gameplay replication is published", {
@@ -20,27 +26,30 @@ MODULE(player_spawn_protocol, {
         } peer;
         auto *downloaded = peer.GetReplicationManager();
         downloaded->Init(&peer, false);
-        Framework::Networking::Replication::NetworkEntity remote;
-        Framework::Networking::Replication::NetworkEntity owner;
-        remote.ownerGUID = MafiaNet::ToPeerGuid(MafiaNet::RakNetGUID(123));
-        owner.ownerGUID = downloaded->GetMyGUID();
-        remote.SetNetworkID(4210);
-        owner.SetNetworkID(4211);
-        downloaded->Reference(&remote);
-        downloaded->Reference(&owner);
+        // Typed lookups compare the registered type id, so the entities come from the registry.
+        Framework::Networking::Replication::EntityRegistry::Get().Register<PlayerSpawnTestEntity>(PlayerSpawnTestEntity::kTypeName);
+        const std::uint32_t typeId = Framework::Networking::Replication::EntityTypeId<PlayerSpawnTestEntity>();
+        std::unique_ptr<Framework::Networking::Replication::NetworkEntity> remote(Framework::Networking::Replication::EntityRegistry::Get().Create(typeId));
+        std::unique_ptr<Framework::Networking::Replication::NetworkEntity> owner(Framework::Networking::Replication::EntityRegistry::Get().Create(typeId));
+        remote->ownerGUID = MafiaNet::ToPeerGuid(MafiaNet::RakNetGUID(123));
+        owner->ownerGUID = downloaded->GetMyGUID();
+        remote->SetNetworkID(4210);
+        owner->SetNetworkID(4211);
+        downloaded->Reference(remote.get());
+        downloaded->Reference(owner.get());
 
         EQUALS(Framework::CoreModules::GetReplication(), nullptr);
-        auto isOwner = [](Framework::Networking::Replication::NetworkEntity *entity) { return entity->IsOwner(); };
-        EQUALS(KCDC::Common::FindReplica<Framework::Networking::Replication::NetworkEntity>(isOwner), nullptr);
-        auto *found = KCDC::Common::FindReplica<Framework::Networking::Replication::NetworkEntity>(isOwner, downloaded);
-        EQUALS(found, &owner);
+        auto isOwner = [](PlayerSpawnTestEntity *entity) { return entity->IsOwner(); };
+        EQUALS(KCDC::Common::FindReplica<PlayerSpawnTestEntity>(isOwner), nullptr);
+        auto *found = KCDC::Common::FindReplica<PlayerSpawnTestEntity>(isOwner, downloaded);
+        EQUALS(static_cast<Framework::Networking::Replication::NetworkEntity *>(found), owner.get());
         KCDC::Shared::RPC::RequestSpawn request;
         request.networkId = found != nullptr ? found->GetNetworkID() : 0;
         EQUALS(request.IsSane(), true);
 
-        downloaded->Dereference(&owner);
-        EQUALS(KCDC::Common::FindReplica<Framework::Networking::Replication::NetworkEntity>(isOwner, downloaded), nullptr);
-        downloaded->Dereference(&remote);
+        downloaded->Dereference(owner.get());
+        EQUALS(KCDC::Common::FindReplica<PlayerSpawnTestEntity>(isOwner, downloaded), nullptr);
+        downloaded->Dereference(remote.get());
     });
 
     IT("round trips a placement", {
