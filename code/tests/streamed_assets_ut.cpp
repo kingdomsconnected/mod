@@ -91,6 +91,8 @@ namespace {
 
         Require(Policy().PrefersStore("textures/kcdc/demo/a.dds.2") && Policy().PrefersStore("sounds/kcdc/demo/a.ogg") && Policy().PrefersStore("sounds/fmod/build/pc/kcdc_demo_music.bank") && !Policy().PrefersStore("objects/kcdc/demo/a.mtl"), "streamed and compressed kinds are stored");
 
+        Require(Policy().PrefersStore("levels/kutnohorsko/terrain/terrain.dat") && Policy().PrefersStore("levels/kutnohorsko/terrain/hlods.dat") && Policy().PrefersStore("levels/kutnohorsko/terrain/cover.ctc") && Policy().PrefersStore("levels/kutnohorsko/physics/layer0.dat") && Policy().PrefersStore("levels/kutnohorsko/recast/rdnavmesh_1.nav") && Policy().PrefersStore("levels/kutnohorsko/recast/rdnavmesh_1.hdr"), "level data the game streams by offset is stored, as the game stores it");
+        Require(!Policy().PrefersStore("levels/kutnohorsko/objects_mission0.xml") && !Policy().PrefersStore("levels/kutnohorsko/tables/ai/scheduler.xml") && !Policy().PrefersStore("levels/kutnohorsko/whdata_0"), "level text and small data still deflates");
         Require(KCDC::Shared::StreamedAssets::Policy::IsAudioControls("sounds/kcdc/demo/atl/controls.xml") && !KCDC::Shared::StreamedAssets::Policy::IsAudioControls("sounds/kcdc/demo/controls.xml"), "ATL controls are recognised by place");
         Require(KCDC::Shared::StreamedAssets::Policy::IsFmodBank("sounds/fmod/build/pc/kcdc_demo_music.bank") && KCDC::Shared::StreamedAssets::Policy::IsParticleLibrary("libs/particles/kcdc_demo_sparks.xml"), "banks and libraries are recognised");
     }

@@ -32,6 +32,7 @@ namespace KCDC::Shared::StreamedAssets {
         constexpr std::array<std::string_view, 8> kLevelExtensions = {".dat", ".lst", ".ctc", ".xml", ".cgf", ".cgfm", ".hdr", ".nav"};
 
         template <std::size_t N>
+        constexpr std::array<std::string_view, 4> kLevelStoredExtensions = {".dat", ".ctc", ".hdr", ".nav"};
         bool Contains(const std::array<std::string_view, N> &set, std::string_view value) {
             for (const std::string_view entry : set) {
                 if (entry == value) {
@@ -330,6 +331,11 @@ namespace KCDC::Shared::StreamedAssets {
     bool Policy::ShouldShip(std::string_view lane, std::string_view, std::string_view normalized, const std::string &sourceFile, std::string &reason) const {
         if (lane != kLaneLevel || !IsLevelEntityXml(normalized)) {
             return true;
+        // A level's terrain, physics and navigation are read in pieces by offset and the game's own
+        // paks store them: deflated, a level streams in minutes rather than seconds.
+        if (normalized.substr(0, 7) == "levels/" && Contains(kLevelStoredExtensions, extension)) {
+            return true;
+        }
         }
         std::ifstream file(sourceFile, std::ios::binary);
         const std::string xml {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
