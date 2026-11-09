@@ -571,7 +571,7 @@ namespace KCDC::Features::Prop {
         void RenderModsTab(const EditorSnapshot &snapshot);
         void ListClientMods();
         void SetClientModsFolder(const std::string &folder);
-        bool ClientModsMatchLoaded() const;
+        bool ClientModsMatchLoaded();
         /** Reloads the level with the ticked mods and reopens the saved project. */
         bool ApplyClientMods(const EditorSnapshot &snapshot, std::string &error);
         void RenderLightTuning(const EditorSnapshot &snapshot);

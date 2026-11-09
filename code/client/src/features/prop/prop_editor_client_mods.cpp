@@ -23,8 +23,18 @@ namespace KCDC::Features::Prop {
         _clientModsListed = false;
     }
 
-    bool MapEditor::ClientModsMatchLoaded() const {
-        return _clientMods == Core::gApplication->GetStreamedAssetService().GetLocalMods();
+    bool MapEditor::ClientModsMatchLoaded() {
+        if (!_clientModsListed) {
+            ListClientMods();
+        }
+        // A ticked mod the folder does not have can never load, so it is no change waiting to apply.
+        std::vector<std::string> loadable;
+        for (const std::string &name : _clientMods) {
+            if (std::any_of(_clientModList.begin(), _clientModList.end(), [&name](const Shared::StreamedAssets::LocalMod &mod) { return mod.resource == name; })) {
+                loadable.push_back(name);
+            }
+        }
+        return loadable == Core::gApplication->GetStreamedAssetService().GetLocalMods();
     }
 
     bool MapEditor::ApplyClientMods(const EditorSnapshot &snapshot, std::string &error) {
@@ -106,9 +116,6 @@ namespace KCDC::Features::Prop {
         ImGui::Separator();
         const bool matches = ClientModsMatchLoaded();
         ImGui::TextUnformatted(matches ? "The ticked mods are loaded." : "The level needs reloading to use the ticked mods.");
-        for (const std::string &warning : Core::gApplication->GetStreamedAssetService().GetLocalModWarnings()) {
-            ImGui::TextWrapped("%s", warning.c_str());
-        }
         ImGui::BeginDisabled(matches || !IsSettled(snapshot));
         if (ImGui::Button("Save and reload the level")) {
             std::string error;
