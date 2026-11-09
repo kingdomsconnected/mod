@@ -19,6 +19,10 @@ namespace KCDC::Core::Boot {
         void SetNickname(std::string_view nickname);
         /** Main-menu-only, once per process; absent or invalid requests return nullopt. */
         std::optional<std::string> TakeWorldBuilderLevel();
+        /** Main-menu-only: a kcdc:// link written to the file KCDC_TEST_CONNECT_FILE names, taken once per write. */
+        std::optional<std::string> TakeConnectLink();
+        /** Whether KCDC_TEST_SCRIPT_APPROVAL=accept answers the risky-script card for this test. */
+        bool AutoAcceptScripts() const;
 
       private:
         AgentTesting();

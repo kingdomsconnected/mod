@@ -75,6 +75,15 @@ namespace KCDC::Core::States {
                 Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->warn("Agent testing: World Builder startup refused for '{}'", request.level);
             }
         }
+        if (auto link = Boot::AgentTesting::Get().TakeConnectLink()) {
+            if (auto request = ParseLaunchLink(*link)) {
+                Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Agent testing: connecting from KCDC_TEST_CONNECT_FILE");
+                ApplyConnectRequest(std::move(*request));
+            }
+            else {
+                Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->warn("Agent testing: ignored a malformed link in KCDC_TEST_CONNECT_FILE");
+            }
+        }
 #endif
         if (const std::optional<WorldBuilderRequest> request = gApplication->GetMultiplayerFrontend().ConsumeBuilderRequest()) {
             if (StartWorldBuilder(*request)) {

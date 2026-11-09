@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cstring>
 #include <string>
+#include <fstream>
 #include <string_view>
 
 namespace KCDC::Core::Boot {
@@ -99,6 +100,28 @@ namespace KCDC::Core::Boot {
     }
 
     std::wstring AgentTesting::GetWindowTitle() const {
+    std::optional<std::string> AgentTesting::TakeConnectLink() {
+        char path[MAX_PATH] {};
+        const DWORD length = GetEnvironmentVariableA("KCDC_TEST_CONNECT_FILE", path, static_cast<DWORD>(sizeof(path)));
+        if (length == 0 || length >= sizeof(path)) {
+            return std::nullopt;
+        }
+        std::ifstream file(path);
+        std::string link;
+        if (!file.is_open() || !std::getline(file, link)) {
+            return std::nullopt;
+        }
+        file.close();
+        std::remove(path);
+        return link;
+    }
+
+    bool AgentTesting::AutoAcceptScripts() const {
+        char value[16] {};
+        const DWORD length = GetEnvironmentVariableA("KCDC_TEST_SCRIPT_APPROVAL", value, static_cast<DWORD>(sizeof(value)));
+        return length > 0 && length < sizeof(value) && std::string_view(value, length) == "accept";
+    }
+
         const std::lock_guard lock(_titleMutex);
         return L"Kingdoms Connected [Agent testing] | " + _testIntent + L" | " + _nickname;
     }

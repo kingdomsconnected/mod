@@ -169,7 +169,15 @@ namespace KCDC::Core::States {
 
                 if (status == KCDC::Core::StreamedAssets::StreamedAssetService::JoinStatus::AwaitingConsent) {
                     gApplication->ShowDownload(Core::DownloadProgress {0, gApplication->GetAssetConsentBytes(), true, 0, false, -1});
-                    if (frontend.ConsumeDownloadConsent()) {
+                    bool accepted = frontend.ConsumeDownloadConsent();
+#if defined(KCDC_AGENT_TESTING)
+                    // An agent-led test has nobody at the screen to accept the size.
+                    if (!accepted) {
+                        Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Agent testing: accepted the asset download without asking");
+                        accepted = true;
+                    }
+#endif
+                    if (accepted) {
                         gApplication->GrantAssetConsent();
                     }
                     return false;
