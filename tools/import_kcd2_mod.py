@@ -13,10 +13,13 @@ A KCD2 mod is `<modid>/mod.manifest` beside `data/*.pak` and
   paks winning as they do for an installed mod;
 - `script/scripts/...`: the mod's Lua, which the client runs in a restricted
   environment;
+- `stream/sounds/kcdc/<resource>/atl/`: its audio controls, from `libs/gameaudio/`,
+  parsed for the level like any streamed controls;
 - `package.json`, naming the mod.
 
 Everything else is left out and listed: quests, Storm, AI trees, UI movies,
-`mod.cfg`. Both ends refuse a pak carrying any of it, so the tool drops it here
+`mod.cfg`, and prefabs. An AI tree can hold `ExecuteLua` that runs outside the
+restricted environment, and Storm merges only at boot. Both ends refuse a pak carrying any of it, so the tool drops it here
 rather than have the server refuse the whole lane. The rules mirror
 `code/shared/streamed_assets/streamed_asset_policy.cpp`; the server checks every
 entry again when it builds the paks.
@@ -36,6 +39,7 @@ REPLACE_DENIED_ROOTS = {"scripts", "libs", "engine", "shaders", "levels", "local
 SPLIT_TEXTURE_CHUNK = re.compile(r"\.dds\.[1-9][0-9]?a?")
 PATCH_FILE = re.compile(r"[a-z0-9_-]+__[a-z0-9_]+\.xml")
 LANGUAGE_PAK = re.compile(r"([a-z]+)_xml\.pak")
+AUDIO_CONTROLS = re.compile(r"libs/gameaudio/([a-z0-9_-]+\.xml)")
 LEVEL_PAK = re.compile(r"data/levels/([a-z0-9_]+)/[^/]+\.pak")
 LEVEL_FOLDERS = {"terrain", "physics", "recast", "hlods", "cestool", "brush", "layers"}
 LEVEL_EXTENSIONS = (".dat", ".lst", ".ctc", ".xml", ".cgf", ".cgfm", ".hdr", ".nav")
@@ -77,6 +81,8 @@ def replace_reason(path):
         return "no folder, or an empty or relative segment"
     if any("." in segment for segment in segments[:-1]):
         return "a dot in a folder name"
+    if re.fullmatch(r"sounds/fmod/build/pc/[^/]+\.bank", normalized):
+        return None
     if normalized.startswith("libs/tables/"):
         return None if PATCH_FILE.fullmatch(segments[-1]) else "a table can only be patched (<table>__<id>.xml)"
     if segments[0] in REPLACE_DENIED_ROOTS:
@@ -167,6 +173,13 @@ def main():
                 for entry in pak.infolist():
                     if entry.is_dir():
                         continue
+                    audio = AUDIO_CONTROLS.fullmatch(entry.filename.replace("\\", "/").lower())
+                    if audio:
+                        target = args.resource / "stream" / "sounds" / "kcdc" / name / "atl" / audio.group(1)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(pak.read(entry))
+                        shipped["stream"] += 1
+                        continue
                     if is_script(entry.filename):
                         contents = pak.read(entry)
                         reason = script_reason(entry.filename, contents)
@@ -214,7 +227,7 @@ def main():
     args.resource.mkdir(parents=True, exist_ok=True)
     (args.resource / "package.json").write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
 
-    print(f"{name}: {shipped['replace']} replace file(s), {shipped['localization']} string patch(es), {shipped['level']} level file(s), {shipped['script']} script(s)")
+    print(f"{name}: {shipped['replace']} replace file(s), {shipped['localization']} string patch(es), {shipped['level']} level file(s), {shipped['script']} script(s), {shipped['stream']} audio control file(s)")
     for reason, count in dropped.most_common():
         print(f"  left out {count}: {reason}")
 

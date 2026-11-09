@@ -62,6 +62,7 @@ namespace {
         Require(Accepts(replace, "objects/manmade/common_furniture/bucket/bucket_a_diff.dds"), "a stock texture can be replaced");
         Require(!Accepts(replace, "libs/tables/item/item.xml") && !Accepts(replace, "scripts/entities/x.lua") && !Accepts(replace, "levels/kutnohorsko/x.cgf"), "code, tables and levels are not replaceable");
         Require(!Accepts(replace, "animations/humans/male/walk.caf"), "stock clips are not replaced globally");
+        Require(!Accepts(replace, "sounds/fmod/build/pc/x.txt") && !Accepts(replace, "sounds/fmod/build/pc/deep/x.bank") && !Accepts(replace, "libs/gameaudio/x.xml"), "only banks, directly in the bank folder");
         Require(!Accepts(replace, "objects/kcdc/demo/x.cgf"), "the kcdc namespace belongs to the stream lane");
         Require(!Accepts("other", "objects/kcdc/demo/x.cgf"), "an unknown lane takes nothing");
 

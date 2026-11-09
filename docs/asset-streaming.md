@@ -80,6 +80,10 @@ one such file.
 | Table patches `libs/tables/.../<table>__<id>.xml`    | `replace/` at the mod's paths | Each `<id>` is reported to the game as an enabled mod, so every database's own loader merges the file row by row -- items, souls, shops, presets and AI brains as much as plain tables. Every database but the AI scheduler's is read again at the level edge |
 | String patches `<file>__<id>.xml`                    | `localization/<language>/`    | Mounted at the game's `Localization` root and merged by the game's own mod-patch loader; the language in use wins, English is the fallback. Retired patches are undone by reading the stock file again                                                        |
 | `scripts/**/*.lua` | `script/scripts/...` | Run by the client in a restricted environment for the session. A mod asking for file, system or dynamic-code access needs the player's approval first |
+| `sounds/fmod/build/pc/*.bank` | `replace/...` | Loaded with the game's FMOD wrapper; a mod's banks keep their own names |
+| `libs/gameaudio/*.xml` | `stream/sounds/kcdc/<resource>/atl/` | The mod's audio controls, parsed for the level |
+| AI trees | -- | Refused: a tree can hold `ExecuteLua` that runs outside the restricted environment |
+| Storm, prefabs | -- | Refused: Storm merges only at boot, and prefabs are already compiled into the level |
 | `mod.cfg` | -- | Refused: a server never sets console variables through a config file |
 | `data/quests/<id>.xml`, `libs/storm/storm__<id>.xml` | --                            | Refused: the game merges them only at boot                                                                                                                                                                                                                    |
 | Level edits, `data/levels/<level>/*.pak`             | `level/levels/<level>/`       | Mounted over the game's level files before the level loads, each file replacing the game's whole. See [Level edits](#level-edits)                                                                                                                             |

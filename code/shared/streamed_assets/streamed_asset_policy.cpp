@@ -287,6 +287,9 @@ namespace KCDC::Shared::StreamedAssets {
                 }
             }
         }
+        else if (lane == kLaneReplace && InFolder(segments, kFmodBankFolder) && Contains(kBankExtensions, extension)) {
+            // A KCD2 mod's banks keep their own names: its scripts and audio controls ask for them by name.
+        }
         else if (lane == kLaneReplace) {
             if (!IsAssetExtension(extension)) {
                 reason = "extension is not an asset kind the engine loads by path";
