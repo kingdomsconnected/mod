@@ -5,6 +5,9 @@
 #include <utils/states/machine.h>
 
 #include "core/application.h"
+#if defined(KCDC_AGENT_TESTING)
+#include "core/boot/agent_testing.h"
+#endif
 #include "core/crash_context.h"
 #include "core/dlc.h"
 #include "core/obfuscation.h"
@@ -182,6 +185,21 @@ namespace KCDC::Core::States {
                     }
                     return false;
                 }
+                if (status == KCDC::Core::StreamedAssets::StreamedAssetService::JoinStatus::AwaitingScriptApproval) {
+                    frontend.ShowScriptApproval(assets.GetUnapprovedScripts());
+                    gApplication->ShowMultiplayerFrontend();
+                    bool accepted = frontend.ConsumeScriptApproval();
+#if defined(KCDC_AGENT_TESTING)
+                    if (!accepted && Boot::AgentTesting::Get().AutoAcceptScripts()) {
+                        Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Agent testing: accepted the script card without asking");
+                        accepted = true;
+                    }
+#endif
+                    if (accepted) {
+                        assets.ApproveScripts();
+                    }
+                    return false;
+                }
                 if (status != KCDC::Core::StreamedAssets::StreamedAssetService::JoinStatus::Ready) {
                     // Only a download long enough to watch gets the card: a cache hit or a small
                     // fetch is over before a popup over the loading screen would read as anything
@@ -228,6 +246,7 @@ namespace KCDC::Core::States {
         // leave a download running.
         gApplication->EndAdmissionWait();
         gApplication->GetMultiplayerFrontend().ShowDownload(std::nullopt);
+        gApplication->GetMultiplayerFrontend().ShowScriptApproval({});
         return SessionStartupState::OnExit(machine);
     }
 } // namespace KCDC::Core::States

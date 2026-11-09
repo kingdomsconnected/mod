@@ -11,12 +11,13 @@ A KCD2 mod is `<modid>/mod.manifest` beside `data/*.pak` and
 - `localization/<language>/`: the string patches of each `<Language>_xml.pak`;
 - `level/levels/<level>/`: the files of each `data/levels/<level>/*.pak`, later
   paks winning as they do for an installed mod;
+- `script/scripts/...`: the mod's Lua, which the client runs in a restricted
+  environment;
 - `package.json`, naming the mod.
 
-Everything else is left out and listed: Lua (`scripts/`), quests, Storm, AI
-trees, UI movies, `mod.cfg`. A server never runs a mod's code, and
-both ends refuse a pak carrying any of it, so the tool drops it here rather than
-have the server refuse the whole lane. The rules mirror
+Everything else is left out and listed: quests, Storm, AI trees, UI movies,
+`mod.cfg`. Both ends refuse a pak carrying any of it, so the tool drops it here
+rather than have the server refuse the whole lane. The rules mirror
 `code/shared/streamed_assets/streamed_asset_policy.cpp`; the server checks every
 entry again when it builds the paks.
 """
@@ -91,6 +92,24 @@ def replace_reason(path):
     return f"{extension or 'no extension'} is not an asset the engine loads by path"
 
 
+def is_script(path):
+    normalized = path.replace("\\", "/").lower()
+    return normalized.startswith("scripts/") and normalized.endswith(".lua")
+
+
+def script_reason(path, data):
+    """Why the script lane would refuse `path`, or None when it ships."""
+    normalized = path.replace("\\", "/").lower()
+    segments = normalized.split("/")
+    if re.search(r"[^a-z0-9_./-]", normalized) or any(not segment or segment in (".", "..") for segment in segments):
+        return "a script path outside [A-Za-z0-9_./-], or an empty or relative segment"
+    if len(segments) < 3 or any("." in segment for segment in segments[:-1]):
+        return "a script outside scripts/.../<name>.lua"
+    if data.startswith(b"\x1b") or b"\0" in data:
+        return "a precompiled script"
+    return None
+
+
 def mod_files(source):
     """(relative path, bytes) for every file of a mod folder or zip, the mod's own folder stripped."""
     if source.is_dir():
@@ -148,6 +167,17 @@ def main():
                 for entry in pak.infolist():
                     if entry.is_dir():
                         continue
+                    if is_script(entry.filename):
+                        contents = pak.read(entry)
+                        reason = script_reason(entry.filename, contents)
+                        if reason:
+                            dropped[reason] += 1
+                            continue
+                        target = args.resource / "script" / entry.filename.replace("\\", "/").lower()
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(contents)
+                        shipped["script"] += 1
+                        continue
                     reason = replace_reason(entry.filename)
                     if reason:
                         dropped[reason] += 1
@@ -184,7 +214,7 @@ def main():
     args.resource.mkdir(parents=True, exist_ok=True)
     (args.resource / "package.json").write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
 
-    print(f"{name}: {shipped['replace']} replace file(s), {shipped['localization']} string patch(es), {shipped['level']} level file(s)")
+    print(f"{name}: {shipped['replace']} replace file(s), {shipped['localization']} string patch(es), {shipped['level']} level file(s), {shipped['script']} script(s)")
     for reason, count in dropped.most_common():
         print(f"  left out {count}: {reason}")
 

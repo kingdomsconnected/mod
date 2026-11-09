@@ -894,6 +894,7 @@ namespace KCDC::Core {
         }
         _multiplayerFrontend.ShowAdmission({});
         _multiplayerFrontend.ShowDownload(std::nullopt);
+        _multiplayerFrontend.ShowScriptApproval({});
         HideMultiplayerFrontend();
         _multiplayerFrontend.Update(*this);
         return true;

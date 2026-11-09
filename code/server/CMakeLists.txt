@@ -64,6 +64,7 @@ set(KCDC_SERVER_FILES
     ../shared/generated/prop_models.cpp
     ../shared/generated/cart_blueprints.cpp
     ../shared/register_entities.cpp
+    ../shared/streamed_assets/lua_script_scan.cpp
     ../shared/streamed_assets/streamed_asset_policy.cpp
 
     ${CMAKE_BINARY_DIR}/kcdc_version.cpp

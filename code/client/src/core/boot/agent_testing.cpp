@@ -12,9 +12,10 @@
 #include "shared/game/levels.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
-#include <string>
 #include <fstream>
+#include <string>
 #include <string_view>
 
 namespace KCDC::Core::Boot {
@@ -99,7 +100,6 @@ namespace KCDC::Core::Boot {
         return std::string(level, length);
     }
 
-    std::wstring AgentTesting::GetWindowTitle() const {
     std::optional<std::string> AgentTesting::TakeConnectLink() {
         char path[MAX_PATH] {};
         const DWORD length = GetEnvironmentVariableA("KCDC_TEST_CONNECT_FILE", path, static_cast<DWORD>(sizeof(path)));
@@ -122,6 +122,7 @@ namespace KCDC::Core::Boot {
         return length > 0 && length < sizeof(value) && std::string_view(value, length) == "accept";
     }
 
+    std::wstring AgentTesting::GetWindowTitle() const {
         const std::lock_guard lock(_titleMutex);
         return L"Kingdoms Connected [Agent testing] | " + _testIntent + L" | " + _nickname;
     }

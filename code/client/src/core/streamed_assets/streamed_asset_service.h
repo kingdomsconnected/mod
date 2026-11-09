@@ -6,6 +6,7 @@
 #include "sdk/cryengine/system/xml_node_ref.h"
 #include "sdk/wh/fsw_bank.h"
 
+#include "mod_script_host.h"
 #include "streamed_asset_settings.h"
 
 #include "shared/streamed_assets/streamed_asset_policy.h"
@@ -63,12 +64,22 @@ namespace KCDC::Core::StreamedAssets {
         enum class JoinStatus {
             Downloading,
             AwaitingConsent,
+            AwaitingScriptApproval,
             Ready,
             Failed,
         };
 
         /** A new connection starts: nothing it streams is mounted yet. */
         void BeginJoin();
+
+        /** The session is over: its scripts end, and everything it mounted retires at the next level edge. */
+        void EndSession();
+
+        /** While AwaitingScriptApproval: one line per mod the player is asked about. */
+        std::vector<std::string> GetUnapprovedScripts() const;
+
+        /** The player accepted those mods. */
+        void ApproveScripts();
 
         /** Mounts the session's assets once they are downloaded. The level must not be asked for before Ready. */
         JoinStatus PollJoin();
@@ -156,6 +167,10 @@ namespace KCDC::Core::StreamedAssets {
         std::unordered_set<std::string> _current;
         // Whether the session's first set is mounted, after which changes are applied in place.
         bool _joined = false;
+        // Whether this join's paks are mounted, while the player may still be answering about its scripts.
+        bool _joinMounted = false;
+        // The Lua of the mods in this session.
+        ModScriptHost _scripts;
 
         // A changed set, mounted a pak per frame: indices into the Framework's list, which only
         // changes again through OnResourceAssetPaksChanged.

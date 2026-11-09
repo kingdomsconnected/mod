@@ -4,6 +4,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Framework::Integrations::Client {
     struct AssetDownloadStatus;
@@ -96,7 +97,7 @@ namespace KCDC::Core {
         void ShowAdmission(const std::string &message);
         /** Whether the card is up, for an admission status or a download. */
         bool IsShowingAdmission() const {
-            return !_admission.empty() || _download.has_value();
+            return !_admission.empty() || _download.has_value() || !_scriptApproval.empty();
         }
 
         /** The player gave up waiting on the admission card. Answered by SessionConnection, from the tick. */
@@ -110,6 +111,12 @@ namespace KCDC::Core {
 
         /** The player accepted the download's size. Answered by SessionConnection, from the tick. */
         bool ConsumeDownloadConsent();
+
+        /** The mods whose scripts ask for risky access, on the admission card, one line each. Empty takes it down. */
+        void ShowScriptApproval(std::vector<std::string> mods);
+
+        /** The player accepted those scripts. Answered by SessionConnection, from the tick. */
+        bool ConsumeScriptApproval();
 
         std::optional<ConnectRequest> ConsumeConnectRequest();
 
@@ -142,6 +149,8 @@ namespace KCDC::Core {
         bool _leaveRequested = false;
         std::optional<DownloadProgress> _download;
         bool _downloadAccepted = false;
+        std::vector<std::string> _scriptApproval;
+        bool _scriptsAccepted = false;
 
         std::optional<ConnectRequest> _connectRequest;
         bool _quitRequested = false;

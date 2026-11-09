@@ -26,6 +26,7 @@ const initialPresentation: FrontendPresentation = {
     message: "",
     admission: "",
     download: null,
+    scriptApproval: [],
 };
 
 const storageKeys = {
@@ -198,10 +199,11 @@ function formatBytes(bytes: number): string {
  * streamed assets download. A download larger than the player's threshold waits here for them to
  * accept its size. Leaving is always a way out.
  */
-function AdmissionCard({ bootstrap, status, download }: { bootstrap: Bootstrap; status: string; download: DownloadProgress | null }) {
+function AdmissionCard({ bootstrap, status, download, scriptApproval }: { bootstrap: Bootstrap; status: string; download: DownloadProgress | null; scriptApproval: string[] }) {
     const leave = useRef<HTMLButtonElement>(null);
     const accept = useRef<HTMLButtonElement>(null);
-    const asking = download?.awaitingConsent ?? false;
+    const reviewing = scriptApproval.length > 0;
+    const asking = reviewing || (download?.awaitingConsent ?? false);
 
     useEffect(() => {
         (asking ? accept : leave).current?.focus();
@@ -216,10 +218,16 @@ function AdmissionCard({ bootstrap, status, download }: { bootstrap: Bootstrap; 
                 <div class="parchment-corner bottom-left" />
                 <div class="parchment-corner bottom-right" />
                 <p class="eyebrow dark">{bootstrap.brand}</p>
-                <h2 class="dialog-title">{download ? "Fetching the server's wares" : "At the gates"}</h2>
+                <h2 class="dialog-title">{reviewing ? "This server runs scripts" : download ? "Fetching the server's wares" : "At the gates"}</h2>
                 <div class="rule dark"><span /><b>&#9670;</b><span /></div>
                 {status && <p class="admission-status">{status}</p>}
-                {download && (asking
+                {reviewing && (
+                    <>
+                        <p class="admission-status">These mods ask to read or write your files, run programs or load more code. Accept only if you trust this server. You won't be asked again unless the scripts change.</p>
+                        <ul class="script-approval">{scriptApproval.map((mod) => <li key={mod}>{mod}</li>)}</ul>
+                    </>
+                )}
+                {!reviewing && download && (asking
                     ? <p class="admission-status">This server streams {formatBytes(download.total)} of models, sounds and textures. They are kept for your next visit.</p>
                     : (
                         <div class="download-progress">
@@ -229,7 +237,8 @@ function AdmissionCard({ bootstrap, status, download }: { bootstrap: Bootstrap; 
                         </div>
                     ))}
                 <div class="admission-actions">
-                    {asking && <button class="primary-button" type="button" ref={accept} onClick={() => emit("menu.acceptDownload")}><span>Download</span><ButtonChevron /></button>}
+                    {reviewing && <button class="primary-button" type="button" ref={accept} onClick={() => emit("menu.acceptScripts")}><span>Accept</span><ButtonChevron /></button>}
+                    {!reviewing && asking && <button class="primary-button" type="button" ref={accept} onClick={() => emit("menu.acceptDownload")}><span>Download</span><ButtonChevron /></button>}
                     <button class="secondary-button" type="button" ref={leave} onClick={() => emit("menu.leave")}><span>Leave</span><ButtonChevron /></button>
                 </div>
             </section>
@@ -680,8 +689,8 @@ function App() {
     return (
         <>
             {presentation.visible && <div class="veil" aria-hidden="true" />}
-            {presentation.visible && (presentation.admission || presentation.download
-                ? <AdmissionCard bootstrap={bootstrap} status={presentation.admission} download={presentation.download} />
+            {presentation.visible && (presentation.admission || presentation.download || presentation.scriptApproval.length > 0
+                ? <AdmissionCard bootstrap={bootstrap} status={presentation.admission} download={presentation.download} scriptApproval={presentation.scriptApproval} />
                 : <Menu bootstrap={bootstrap} presentation={effectivePresentation} onLocalMessage={showLocalMessage} />)}
         </>
     );

@@ -116,9 +116,32 @@ namespace KCDC::Core::StreamedAssets {
     void StreamedAssetService::BeginJoin() {
         EnsureListening();
         _error.clear();
-        _joined   = false;
-        _applying = false;
+        _joined      = false;
+        _joinMounted = false;
+        _applying    = false;
         _pending.clear();
+        _scripts.Stop();
+        _scripts.ClearStaged();
+    }
+
+    void StreamedAssetService::EndSession() {
+        _scripts.Stop();
+        _scripts.ClearStaged();
+        // The level stays up behind the menu. Whatever loads next, a session or the offline World
+        // Builder, replaces it, and that edge retires everything this session mounted.
+        _current.clear();
+        _joined      = false;
+        _joinMounted = false;
+        _applying    = false;
+        _pending.clear();
+    }
+
+    std::vector<std::string> StreamedAssetService::GetUnapprovedScripts() const {
+        return _scripts.DescribeUnapproved();
+    }
+
+    void StreamedAssetService::ApproveScripts() {
+        _scripts.ApproveStaged();
     }
 
     std::unordered_set<std::string> StreamedAssetService::CurrentPaths() const {
@@ -151,19 +174,26 @@ namespace KCDC::Core::StreamedAssets {
 
         // A server that ships nothing still settles the set: whatever the last one shipped retires at
         // the level edge.
-        _clips.clear();
-        for (const Framework::Integrations::Client::ResourceAssetPak &pak : paks) {
-            if (!Mount(pak, true)) {
-                return JoinStatus::Failed;
+        if (!_joinMounted) {
+            _clips.clear();
+            for (const Framework::Integrations::Client::ResourceAssetPak &pak : paks) {
+                if (!Mount(pak, true)) {
+                    return JoinStatus::Failed;
+                }
+            }
+            _current     = CurrentPaths();
+            _joinMounted = true;
+            RebuildClipDatabase();
+            SyncModData(false);
+            if (!paks.empty()) {
+                Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Asset paks in use: {}", paks.size());
             }
         }
-        _current = CurrentPaths();
-        _joined  = true;
-        RebuildClipDatabase();
-        SyncModData(false);
-        if (!paks.empty()) {
-            Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Asset paks in use: {}", paks.size());
+        if (!_scripts.DescribeUnapproved().empty()) {
+            return JoinStatus::AwaitingScriptApproval;
         }
+        _scripts.Start();
+        _joined = true;
         return JoinStatus::Ready;
     }
 
@@ -230,6 +260,30 @@ namespace KCDC::Core::StreamedAssets {
         if (!Framework::Utils::StreamedAssets::PakArchive::Validate(path, *KCDC::Shared::StreamedAssets::Policy::Get(), pak.info.lane, pak.resource, entries, error)) {
             Fail("A streamed pak from '" + pak.resource + "' was refused: " + error);
             return false;
+        }
+
+        // Scripts are never mounted, so the game cannot find them by itself: they run in the
+        // environment the host gives them, from the text read here.
+        if (pak.info.lane == KCDC::Shared::StreamedAssets::kLaneScript) {
+            if (!joining) {
+                Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->warn("'{}' changed its scripts mid-session; they run from the next join", pak.resource);
+                return true;
+            }
+            std::vector<KCDC::Core::StreamedAssets::ModScriptHost::Source> sources;
+            for (const Framework::Utils::StreamedAssets::PakEntry &entry : entries) {
+                std::string text = ReadEntry(path, entry.path);
+                if (text.empty() && entry.size != 0) {
+                    Fail("A streamed pak from '" + pak.resource + "' could not be read");
+                    return false;
+                }
+                sources.emplace_back(entry.path, std::move(text));
+            }
+            std::string refused;
+            if (!_scripts.Stage(pak.resource, path, std::move(sources), refused)) {
+                Fail(refused);
+                return false;
+            }
+            return true;
         }
 
         SDK::ICryPak *cryPak        = SDK::ICryPak::GetInstance();

@@ -1,5 +1,7 @@
 #include "streamed_asset_policy.h"
 
+#include "lua_script_scan.h"
+
 #include <array>
 #include <cctype>
 #include <fstream>
@@ -30,9 +32,9 @@ namespace KCDC::Shared::StreamedAssets {
         // level's info file names a script the load runs.
         constexpr std::array<std::string_view, 7> kLevelFolders    = {"terrain", "physics", "recast", "hlods", "cestool", "brush", "layers"};
         constexpr std::array<std::string_view, 8> kLevelExtensions = {".dat", ".lst", ".ctc", ".xml", ".cgf", ".cgfm", ".hdr", ".nav"};
+        constexpr std::array<std::string_view, 4> kLevelStoredExtensions = {".dat", ".ctc", ".hdr", ".nav"};
 
         template <std::size_t N>
-        constexpr std::array<std::string_view, 4> kLevelStoredExtensions = {".dat", ".ctc", ".hdr", ".nav"};
         bool Contains(const std::array<std::string_view, N> &set, std::string_view value) {
             for (const std::string_view entry : set) {
                 if (entry == value) {
@@ -191,7 +193,7 @@ namespace KCDC::Shared::StreamedAssets {
     }
 
     const std::vector<std::string> &Policy::GetLanes() const {
-        static const std::vector<std::string> lanes = {kLaneStream, kLaneReplace, kLaneLocalization, kLaneLevel};
+        static const std::vector<std::string> lanes = {kLaneStream, kLaneReplace, kLaneLocalization, kLaneLevel, kLaneScript};
         return lanes;
     }
 
@@ -311,6 +313,12 @@ namespace KCDC::Shared::StreamedAssets {
                 return false;
             }
         }
+        else if (lane == kLaneScript) {
+            if (segments.size() < 3 || segments[0] != "scripts" || extension != ".lua") {
+                reason = "scripts must be scripts/.../<name>.lua";
+                return false;
+            }
+        }
         else {
             reason = "unknown lane";
             return false;
@@ -323,27 +331,32 @@ namespace KCDC::Shared::StreamedAssets {
     bool Policy::PrefersStore(std::string_view normalized) const {
         const std::size_t slash          = normalized.rfind('/');
         const std::string_view extension = ExtensionOf(normalized.substr(slash == std::string_view::npos ? 0 : slash + 1));
+        // A level's terrain, physics and navigation are read in pieces by offset and the game's own
+        // paks store them: deflated, a level streams in minutes rather than seconds.
+        if (normalized.substr(0, 7) == "levels/" && Contains(kLevelStoredExtensions, extension)) {
+            return true;
+        }
         // FMOD reads banks in place and streams their sample data; DDS mips and ogg are streamed
         // or already compressed.
         return extension == ".ogg" || extension.substr(0, 4) == ".dds" || Contains(kBankExtensions, extension);
     }
 
     bool Policy::ShouldShip(std::string_view lane, std::string_view, std::string_view normalized, const std::string &sourceFile, std::string &reason) const {
-        if (lane != kLaneLevel || !IsLevelEntityXml(normalized)) {
+        const bool script = lane == kLaneScript;
+        if (!script && (lane != kLaneLevel || !IsLevelEntityXml(normalized))) {
             return true;
-        // A level's terrain, physics and navigation are read in pieces by offset and the game's own
-        // paks store them: deflated, a level streams in minutes rather than seconds.
-        if (normalized.substr(0, 7) == "levels/" && Contains(kLevelStoredExtensions, extension)) {
-            return true;
-        }
         }
         std::ifstream file(sourceFile, std::ios::binary);
-        const std::string xml {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        const std::string text {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
         if (!file.good() && !file.eof()) {
-            reason = "the level's entity XML could not be read";
+            reason = "the file could not be read";
             return false;
         }
-        if (LevelXmlRunsScript(xml)) {
+        if (script && ScanLuaScript(text).unreadable) {
+            reason = "the script is precompiled";
+            return false;
+        }
+        if (!script && LevelXmlRunsScript(text)) {
             reason = "the level's entity XML runs a script";
             return false;
         }
@@ -383,6 +396,11 @@ namespace KCDC::Shared::StreamedAssets {
             }
         }
         return false;
+    }
+
+    bool Policy::IsModEntryScript(std::string_view normalized) {
+        const std::vector<std::string_view> segments = Split(normalized);
+        return segments.size() == 3 && segments[0] == "scripts" && segments[1] == "mods" && EndsWith(normalized, ".lua");
     }
 
     bool Policy::IsAnimationClip(std::string_view normalized) {

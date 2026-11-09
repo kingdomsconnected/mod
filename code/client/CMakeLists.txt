@@ -47,6 +47,7 @@ set(KCDC_CLIENT_FILES
     src/core/ui/native_ui/native_ui_trace.cpp
 
     # core/streamed_assets/ -- the asset paks a server's resources ship, mounted and registered
+    src/core/streamed_assets/mod_script_host.cpp
     src/core/streamed_assets/streamed_asset_scripting.cpp
     src/core/streamed_assets/streamed_asset_service.cpp
     src/core/streamed_assets/streamed_asset_settings.cpp
@@ -119,6 +120,7 @@ set(KCDC_CLIENT_FILES
     ../shared/game/npc_roles.cpp
     ../shared/generated/equipment_catalog.cpp
     ../shared/generated/vfx_catalog.cpp
+    ../shared/streamed_assets/lua_script_scan.cpp
     ../shared/streamed_assets/streamed_asset_policy.cpp
 
     ${CMAKE_BINARY_DIR}/kcdc_version.cpp
