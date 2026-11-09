@@ -102,6 +102,8 @@ namespace KCDC::Core {
         bool _worldBuilderAccess = false;
         // Offline World Builder: no connection, the level the menu asked for.
         std::string _offlineBuilderLevel;
+        std::string _offlineBuilderModsFolder;
+        std::vector<std::string> _offlineBuilderMods;
         bool _offlineBuilder      = false;
         bool _offlineBuilderReady = false;
         bool _offlineBuilderEnded = false;
@@ -598,6 +600,18 @@ namespace KCDC::Core {
 
         /** Game-thread offline switch with catalog/DLC checks and the normal load lifecycle. Discards the old project only when accepted. */
         bool RequestOfflineBuilderLevel(const std::string &levelName, std::string &error);
+
+        /** The client mods WorldBuilderState loads with the next offline level: the resources folder and the ticked names. */
+        void SetOfflineBuilderMods(std::string folder, std::vector<std::string> mods) {
+            _offlineBuilderModsFolder = std::move(folder);
+            _offlineBuilderMods       = std::move(mods);
+        }
+        const std::string &GetOfflineBuilderModsFolder() const {
+            return _offlineBuilderModsFolder;
+        }
+        const std::vector<std::string> &GetOfflineBuilderMods() const {
+            return _offlineBuilderMods;
+        }
 
         /** The level the menu chose for the offline World Builder; WorldBuilderState loads it. */
         void SetOfflineBuilderLevel(std::string level) {

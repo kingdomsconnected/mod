@@ -31,8 +31,13 @@ namespace KCDC::Core::States {
     }
 
     bool WorldBuilderState::OnEnter(Framework::Utils::States::Machine *) {
-        _phase        = Phase::HidingMenu;
+        _phase        = Phase::PreparingMods;
         _hiddenFrames = 0;
+        gApplication->GetStreamedAssetService().BeginLocalMods(gApplication->GetOfflineBuilderModsFolder(), gApplication->GetOfflineBuilderMods());
+        if (!gApplication->GetOfflineBuilderMods().empty()) {
+            gApplication->GetMultiplayerFrontend().ShowAdmission("Preparing the client mods. The first time can take a few minutes.");
+            gApplication->ShowMultiplayerFrontend();
+        }
         CrashContext::SetTag("session.state", "world-builder");
         CrashContext::Breadcrumb("state", "Entered the offline World Builder");
         return true;
@@ -50,6 +55,25 @@ namespace KCDC::Core::States {
             }
         }
         switch (_phase) {
+        case Phase::PreparingMods: {
+            if (gApplication->GetMultiplayerFrontend().ConsumeLeaveRequest()) {
+                Leave(machine, nullptr);
+                return true;
+            }
+            KCDC::Core::StreamedAssets::StreamedAssetService &assets = gApplication->GetStreamedAssetService();
+            const KCDC::Core::StreamedAssets::StreamedAssetService::JoinStatus status = assets.PollLocalMods();
+            if (status == KCDC::Core::StreamedAssets::StreamedAssetService::JoinStatus::Failed) {
+                gApplication->EndAdmissionWait();
+                Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->error("{}", assets.GetError());
+                Leave(machine, "The client mods could not be loaded. Check the client log.");
+                return true;
+            }
+            if (status == KCDC::Core::StreamedAssets::StreamedAssetService::JoinStatus::Ready) {
+                gApplication->EndAdmissionWait();
+                _phase = Phase::HidingMenu;
+            }
+            return false;
+        }
         case Phase::HidingMenu: {
             if (++_hiddenFrames < kHiddenFramesBeforeLoad) {
                 return false;

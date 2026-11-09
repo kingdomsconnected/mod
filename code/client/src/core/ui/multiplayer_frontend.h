@@ -34,6 +34,8 @@ namespace KCDC::Core {
         };
         Action action = Action::NewProject;
         std::string level;
+        /** A project to open without asking; only an agent test supplies one. */
+        std::string projectPath;
     };
 
     /**

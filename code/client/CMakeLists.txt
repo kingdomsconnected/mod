@@ -120,6 +120,7 @@ set(KCDC_CLIENT_FILES
     ../shared/game/npc_roles.cpp
     ../shared/generated/equipment_catalog.cpp
     ../shared/generated/vfx_catalog.cpp
+    ../shared/streamed_assets/local_mod_folder.cpp
     ../shared/streamed_assets/lua_script_scan.cpp
     ../shared/streamed_assets/streamed_asset_policy.cpp
 

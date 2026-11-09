@@ -501,6 +501,29 @@ lost on the next save. Older projects open with default viewport settings,
 an empty project favorites folder, every object in Default, and the level's
 own conditions.
 
+### Client mods (Mods tab)
+
+Offline, a project can load the client mods a server would stream, so you can
+place lights and other objects against the modded world.
+
+1. Open the **Mods** tab and choose your server's `resources` folder, the one
+   that holds the client mods.
+2. Tick the mods this project needs. A mod whose scripts ask for file, system
+   or dynamic-code access says so beside its box; ticking it accepts that.
+3. Press **Save and reload the level**.
+
+The folder and the ticked mods are saved with the project. Opening the project
+from the menu loads them first; the first load of a large mod can take a few
+minutes. A ticked mod missing from the folder is skipped with a warning. Leaving
+the World Builder, or loading a level without mods, puts the game back as it was.
+
+In a session the server decides which mods load, so the tab has no effect there.
+
+MCP: `wb_client_mods_get`, `wb_client_mods_update` and `wb_client_mods_apply`.
+A folder set through MCP must be inside the allowed roots; choose others in the
+tab. Applying needs a saved project and drops the connection until the level is
+back, like `wb_level_load`.
+
 ### Grid and gizmo coordinates
 
 Use **World axes** or **Local axes** in the top toolbar, or press **G**, to

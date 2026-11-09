@@ -39,6 +39,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -124,9 +126,87 @@ namespace KCDC::Core::StreamedAssets {
         _scripts.ClearStaged();
     }
 
+    void StreamedAssetService::BeginLocalMods(const std::string &folder, std::vector<std::string> resources) {
+        EnsureListening();
+        _error.clear();
+        _localWarnings.clear();
+        if (_localBuild.valid()) {
+            _localBuild.wait();
+        }
+        // Inside the servers folder, so an approval beside it holds for these too.
+        const std::filesystem::path cache = std::filesystem::u8path(KCDC::Core::gGlobals.projectPath) / "cache" / "servers" / "local";
+        _localBuild                       = std::async(std::launch::async, [root = std::filesystem::u8path(folder), resources = std::move(resources), cache]() {
+            LocalBuild build;
+            std::string listError;
+            const std::vector<KCDC::Shared::StreamedAssets::LocalMod> found = resources.empty() ? std::vector<KCDC::Shared::StreamedAssets::LocalMod> {} : KCDC::Shared::StreamedAssets::ListLocalMods(root, listError);
+            for (const std::string &resource : resources) {
+                const bool exists = std::any_of(found.begin(), found.end(), [&resource](const KCDC::Shared::StreamedAssets::LocalMod &mod) { return mod.resource == resource; });
+                if (!exists) {
+                    build.warnings.push_back(resource + " is not in the resources folder and was not loaded.");
+                    continue;
+                }
+                std::vector<KCDC::Shared::StreamedAssets::LocalModPak> paks;
+                if (!KCDC::Shared::StreamedAssets::BuildLocalMod(root, resource, cache, paks, build.error)) {
+                    return build;
+                }
+                build.resources.push_back(resource);
+                for (KCDC::Shared::StreamedAssets::LocalModPak &pak : paks) {
+                    build.paks.emplace_back(resource, std::move(pak));
+                }
+            }
+            return build;
+        });
+    }
+
+    StreamedAssetService::JoinStatus StreamedAssetService::PollLocalMods() {
+        if (!_localBuild.valid() || _localBuild.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return JoinStatus::Downloading;
+        }
+        LocalBuild build = _localBuild.get();
+        _localWarnings   = std::move(build.warnings);
+        for (const std::string &warning : _localWarnings) {
+            Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->warn("{}", warning);
+        }
+        if (!build.error.empty()) {
+            Fail(build.error);
+            return JoinStatus::Failed;
+        }
+
+        _scripts.Stop();
+        _scripts.ClearStaged();
+        _applying = false;
+        _pending.clear();
+        _clips.clear();
+        std::unordered_set<std::string> paths;
+        for (const auto &[resource, built] : build.paks) {
+            Framework::Integrations::Client::ResourceAssetPak pak;
+            pak.resource    = resource;
+            pak.info.lane   = built.lane;
+            pak.info.sha256 = built.sha256;
+            pak.info.size   = built.size;
+            pak.path        = built.path;
+            if (!Mount(pak, true)) {
+                return JoinStatus::Failed;
+            }
+            paths.insert(built.path);
+        }
+        _current     = std::move(paths);
+        _localMods   = std::move(build.resources);
+        _joinMounted = true;
+        _joined      = true;
+        RebuildClipDatabase();
+        SyncModData(false);
+        // Ticking a mod in the editor is the owner's answer; its risks are listed beside the box.
+        _scripts.ApproveStaged();
+        _scripts.Start();
+        Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Local client mods in use: {}", _localMods.size());
+        return JoinStatus::Ready;
+    }
+
     void StreamedAssetService::EndSession() {
         _scripts.Stop();
         _scripts.ClearStaged();
+        _localMods.clear();
         // The level stays up behind the menu. Whatever loads next, a session or the offline World
         // Builder, replaces it, and that edge retires everything this session mounted.
         _current.clear();

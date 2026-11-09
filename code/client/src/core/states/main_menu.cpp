@@ -67,6 +67,7 @@ namespace KCDC::Core::States {
             else {
                 WorldBuilderRequest request;
                 request.level = std::move(*level);
+                request.projectPath = Boot::AgentTesting::Get().WorldBuilderProject().value_or(std::string {});
                 if (StartWorldBuilder(request)) {
                     Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Agent testing: starting World Builder in '{}' from KCDC_TEST_WORLD_BUILDER", request.level);
                     machine->RequestNextState(StateIds::WorldBuilder);
@@ -116,8 +117,10 @@ namespace KCDC::Core::States {
     bool MainMenuState::StartWorldBuilder(const WorldBuilderRequest &request) {
         KCDC::Core::MultiplayerFrontend &frontend = gApplication->GetMultiplayerFrontend();
         std::string level                         = request.level;
-        std::string project;
+        std::string project = request.projectPath;
         std::string error;
+        std::string modsFolder;
+        std::vector<std::string> mods;
         if (request.action == WorldBuilderRequest::Action::OpenProject) {
             project = KCDC::Features::Prop::MapFiles::ChoosePath(false, false, "", error);
             if (project.empty()) {
@@ -142,7 +145,9 @@ namespace KCDC::Core::States {
                 frontend.ShowError(request.action == WorldBuilderRequest::Action::LastProject ? "Could not load the last project. Use Open project to choose it again.\n" + error : error);
                 return false;
             }
-            level = document.level;
+            level      = document.level;
+            modsFolder = document.clientModsFolder;
+            mods       = document.clientMods;
         }
 
         const Shared::Game::PlayableLevel *playable = Shared::Game::FindPlayableLevel(level);
@@ -165,6 +170,7 @@ namespace KCDC::Core::States {
             gApplication->GetMapEditor().RequestProject(project);
         }
         gApplication->SetOfflineBuilderLevel(level);
+        gApplication->SetOfflineBuilderMods(std::move(modsFolder), std::move(mods));
         gApplication->HideMultiplayerFrontend();
         CrashContext::Breadcrumb("state", "World Builder asked for from the menu");
         return true;

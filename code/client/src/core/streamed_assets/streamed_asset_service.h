@@ -9,17 +9,20 @@
 #include "mod_script_host.h"
 #include "streamed_asset_settings.h"
 
+#include "shared/streamed_assets/local_mod_folder.h"
 #include "shared/streamed_assets/streamed_asset_policy.h"
 
 #include <utils/streamed_assets/pak_archive.h>
 
 #include <cstdint>
 #include <deque>
+#include <future>
 #include <set>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Framework::Integrations::Client {
@@ -71,6 +74,25 @@ namespace KCDC::Core::StreamedAssets {
 
         /** A new connection starts: nothing it streams is mounted yet. */
         void BeginJoin();
+
+        /**
+         * The offline World Builder has no server: builds the ticked mods out of `folder` on a worker,
+         * for PollLocalMods to mount before the level is asked for. No mods retires what is mounted.
+         */
+        void BeginLocalMods(const std::string &folder, std::vector<std::string> resources);
+
+        /** Downloading while the worker runs, then Ready or Failed. Game thread. */
+        JoinStatus PollLocalMods();
+
+        /** The local mods in use, sorted. */
+        const std::vector<std::string> &GetLocalMods() const {
+            return _localMods;
+        }
+
+        /** Why the last build left something out. */
+        const std::vector<std::string> &GetLocalModWarnings() const {
+            return _localWarnings;
+        }
 
         /** The session is over: its scripts end, and everything it mounted retires at the next level edge. */
         void EndSession();
@@ -167,6 +189,17 @@ namespace KCDC::Core::StreamedAssets {
         std::unordered_set<std::string> _current;
         // Whether the session's first set is mounted, after which changes are applied in place.
         bool _joined = false;
+        // The offline World Builder's mods: the worker building them, what it answered, and what is in use.
+        struct LocalBuild {
+            std::vector<std::pair<std::string, KCDC::Shared::StreamedAssets::LocalModPak>> paks;
+            std::vector<std::string> resources;
+            std::vector<std::string> warnings;
+            std::string error;
+        };
+        std::future<LocalBuild> _localBuild;
+        std::vector<std::string> _localMods;
+        std::vector<std::string> _localWarnings;
+
         // Whether this join's paks are mounted, while the player may still be answering about its scripts.
         bool _joinMounted = false;
         // The Lua of the mods in this session.

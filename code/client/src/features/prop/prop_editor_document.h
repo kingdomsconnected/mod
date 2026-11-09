@@ -82,6 +82,9 @@ namespace KCDC::Features::Prop {
         std::string level;
         std::string exportDirectory;
         std::string resourceName = "untitled";
+        /** The resources folder the owner picked, and the client mods ticked in it. */
+        std::string clientModsFolder;
+        std::vector<std::string> clientMods;
         std::vector<DocumentObject> objects;
         std::vector<DocumentEffect> effects;
         std::vector<DocumentLight> lights;

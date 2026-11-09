@@ -116,6 +116,15 @@ namespace KCDC::Core::Boot {
         return link;
     }
 
+    std::optional<std::string> AgentTesting::WorldBuilderProject() const {
+        char path[MAX_PATH] {};
+        const DWORD length = GetEnvironmentVariableA("KCDC_TEST_WORLD_BUILDER_PROJECT", path, static_cast<DWORD>(sizeof(path)));
+        if (length == 0 || length >= sizeof(path)) {
+            return std::nullopt;
+        }
+        return std::string(path, length);
+    }
+
     bool AgentTesting::AutoAcceptScripts() const {
         char value[16] {};
         const DWORD length = GetEnvironmentVariableA("KCDC_TEST_SCRIPT_APPROVAL", value, static_cast<DWORD>(sizeof(value)));

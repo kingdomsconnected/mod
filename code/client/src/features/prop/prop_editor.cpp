@@ -4128,7 +4128,7 @@ namespace KCDC::Features::Prop {
             // The status line is pinned below the tabs.
             const float statusHeight = ImGui::GetTextLineHeightWithSpacing() * (_notice.empty() ? 2.0F : 4.0F) + 12.0F;
             if (ImGui::BeginChild("##kcdc_editor_body", ImVec2(0.0F, -statusHeight))) {
-                constexpr const char *tabs[] {"Project", "Blueprints", "Library", "Effects", "Scene", "Level", "Object", "Areas", "Camera", "Environment", "Patrols", "MCP", "Layers", "Lights", "Keys"};
+                constexpr const char *tabs[] {"Project", "Blueprints", "Library", "Effects", "Scene", "Level", "Object", "Areas", "Camera", "Environment", "Patrols", "MCP", "Layers", "Lights", "Keys", "Mods"};
                 auto *storage         = ImGui::GetStateStorage();
                 const ImGuiID tabKey  = ImGui::GetID("##kcdc_editor_tabs");
                 int activeTab         = storage->GetInt(tabKey, 0);
@@ -4166,6 +4166,7 @@ namespace KCDC::Features::Prop {
                 case 3: RenderEffectsTab(snapshot); break;
                 case 13: RenderLightsTab(snapshot); break;
                 case 14: RenderKeysTab(); break;
+                case 15: RenderModsTab(snapshot); break;
                 case 4: RenderSceneTab(snapshot); break;
                 case 5: RenderLevelTab(snapshot); break;
                 case 6: RenderObjectTab(snapshot); break;

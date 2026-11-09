@@ -1,4 +1,5 @@
 #pragma once
+#include "shared/streamed_assets/local_mod_folder.h"
 #include "prop_editor_map_travel.h"
 
 #include "features/area/area_collision_service.h"
@@ -278,6 +279,8 @@ namespace KCDC::Features::Prop {
      * systems are game-thread only and ImGui runs in the present hook, so the
      * two halves share nothing else.
      */
+    inline constexpr const char *kDirectoryPicker = "Choose folder";
+
     class MapEditor final {
       public:
         void SetOpen(bool open);
@@ -565,6 +568,12 @@ namespace KCDC::Features::Prop {
         void RenderSidebar(const EditorSnapshot &snapshot);
         void RenderLibraryTab(const EditorSnapshot &snapshot);
         void RenderLightsTab(const EditorSnapshot &snapshot);
+        void RenderModsTab(const EditorSnapshot &snapshot);
+        void ListClientMods();
+        void SetClientModsFolder(const std::string &folder);
+        bool ClientModsMatchLoaded() const;
+        /** Reloads the level with the ticked mods and reopens the saved project. */
+        bool ApplyClientMods(const EditorSnapshot &snapshot, std::string &error);
         void RenderLightTuning(const EditorSnapshot &snapshot);
         void RenderLightMarkers(const EditorSnapshot &snapshot);
         void RenderEffectsTab(const EditorSnapshot &snapshot);
@@ -883,6 +892,12 @@ namespace KCDC::Features::Prop {
         // always unsaved -- a recovered autosave, for one.
         char _mapName[64] = "untitled";
         char _exportDirectory[1024] {};
+        char _clientModsFolder[1024] {};
+        char *_directoryTarget = _exportDirectory;
+        std::vector<std::string> _clientMods;
+        std::vector<Shared::StreamedAssets::LocalMod> _clientModList;
+        std::string _clientModListError;
+        bool _clientModsListed = false;
         char _directoryInput[1024] {};
         std::string _browsedDirectory;
         std::vector<std::string> _directoryEntries;
