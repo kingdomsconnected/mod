@@ -18,6 +18,7 @@
 #include "damage_ut.h"
 #include "death_ut.h"
 #include "dice_ut.h"
+#include "dice_npc_ut.h"
 #include "door_api_ut.h"
 #include "door_ut.h"
 #include "duel_ut.h"
@@ -479,6 +480,9 @@ int main(int argc, char **argv) {
         }
         if (suite == "door-api") {
             return RunDoorApiSuite();
+        }
+        if (suite == "dice-npc") {
+            return RunDiceNpcSuite();
         }
         if (suite == "stash-rpc") {
             return RunStashRpcSuite();

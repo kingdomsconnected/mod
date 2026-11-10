@@ -272,12 +272,12 @@ declare global {
     diceTurnStart: [event: DiceProgressEvent];
 
     /**
-     * The server dealt a roll. Includes all six face values and the mask rolled this time.
+     * The server dealt a roll. Includes all six face values and the mask rolled this time. When `player` is the NPC on the second seat and `reason` is `rolled`, the decision is the script's: answer with Dice.move.
      */
     diceRoll: [event: DiceProgressEvent];
 
     /**
-     * The server accepted Continue or Pass. Invalid or repeated requests emit nothing.
+     * The server accepted Continue or Pass, from a player or through Dice.move. Invalid or repeated requests emit nothing.
      */
     diceMove: [event: DiceProgressEvent];
 
@@ -287,14 +287,14 @@ declare global {
     diceTurnEnd: [event: DiceProgressEvent];
 
     /**
-     * Dispatched once a match has started and both players have been sent to the table. Which of them throws first is drawn at random.
+     * Dispatched once a match has started and its players have been sent to the table. `second` is the Npc when one holds the second seat. Which seat throws first is drawn at random.
      */
-    diceMatchStart: [match: number, first: Player, second: Player, targetScore: number];
+    diceMatchStart: [match: number, first: Player, second: Player | Npc, targetScore: number];
 
     /**
-     * Dispatched once a match is over and both players have been told. `winner` is 0 when `first` won, 1 when `second` did, 255 when nobody did. `reason` is `won` (a player banked the target score), `gaveUp` (a player left the table), `left` (a player disconnected), `timedOut` (the player to throw did not move for three minutes), `failed` (a client could not play the table) or `stopped` (`Dice.stop`). A player who has gone since is null. Nothing changes hands on its own: what a match was played for is the gamemode's to settle here.
+     * Dispatched once a match is over and both players have been told. `winner` is 0 when `first` won, 1 when `second` did, 255 when nobody did. `reason` is `won` (a seat banked the target score), `gaveUp` (a player left the table), `left` (a player disconnected, or the NPC was removed or died), `timedOut` (the seat to throw, player or NPC, did not move for three minutes), `failed` (a client could not play the table) or `stopped` (`Dice.stop`). A player or NPC who has gone since is null. Nothing changes hands on its own: what a match was played for is the gamemode's to settle here.
      */
-    diceMatchEnd: [match: number, first: Player | null, second: Player | null, winner: number, reason: string, firstScore: number, secondScore: number];
+    diceMatchEnd: [match: number, first: Player | null, second: Player | Npc | null, winner: number, reason: string, firstScore: number, secondScore: number];
 
     /**
      * Synchronous decision before an unfinished craft settles, including when no native refund is due. Call refund() to request a full refund; return values are ignored. No handler or no call preserves native rules. JavaScript exceptions are logged and do not cancel a call already made. The callback expires on return; delayed calls do nothing. The `cancelled`, `interrupted` and `clientError` reasons are reported by the player's own client: a modified client can send any of them, so refunding on one lets that client keep its materials. Never grants a completed craft twice. craftingEnded follows the actual inventory changes.
@@ -3093,7 +3093,7 @@ declare global {
     match: number;
 
     /**
-     * Network ID of the acting player.
+     * Network ID of the acting player, or of the NPC on the second seat.
      */
     player: number;
 
@@ -3154,9 +3154,11 @@ declare global {
   }
 
   /**
-   * Dice matches between two players on the game's own dice table.
+   * Dice matches between two players, or a player and a server NPC, on the game's own dice table.
    * 
    * Both players sit down at the dice table nearest them and play it as they would against an NPC, the other player's body opposite. Every throw is dealt and every move checked by the server, by the game's own scoring rules; badges and dice perks are off, so a match is decided by the dice and the decisions alone.
+   * 
+   * An Npc may hold the second seat. Its body sits opposite the player, its throws are dealt like anyone's, and its decisions are the script's: `diceRoll` says what it threw, `Dice.move` plays its move.
    */
   const Dice: {
     /**
@@ -3167,13 +3169,22 @@ declare global {
     tables(virtualWorld?: number): DiceTableInfo[];
 
     /**
-     * Starts a match. Both players must stand together, within a few metres, at a dice table, and neither may be playing already. Throws an Error saying why when it cannot start.
+     * Starts a match. Both players must stand together, within a few metres, at a dice table, and neither may be playing already. An NPC is held to the same: it must stand at the table with the player, in the same virtual world. Throws an Error saying why when it cannot start.
      * @param first NetworkID of the player on the table's first seat.
-     * @param second NetworkID of the player on the second seat.
+     * @param second NetworkID of the player on the second seat, or of a living human Npc to seat there and play through Dice.move.
      * @param options The target score. Optional.
      * @returns The match id.
      */
     start(first: number, second: number, options?: DiceMatchOptions): number;
+
+    /**
+     * Plays the move of the NPC on the second seat, checked by the rules a player's move is. Legal only while it is the NPC's turn and its throw is on the table, so after a `diceRoll` naming it with reason `rolled`; calling it from that handler is supported. An accepted move raises `diceMove` and what follows from it. The NPC forfeits like a player when no move is accepted for three minutes.
+     * @param match Match ID.
+     * @param heldMask Bit mask of the dice to set aside, bit 0 for die 0 through bit 5 for die 5, among those `diceRoll` reported in `rolledMask`. Every die in it must count towards a scoring combination.
+     * @param pass True banks the turn after scoring the held dice, if any. False scores them, which needs at least one, and throws the rest.
+     * @returns False, with nothing changed, when the match has ended or has no NPC seat, it is not the NPC's turn, or the move is not legal.
+     */
+    move(match: number, heldMask: number, pass: boolean): boolean;
 
     /**
      * Changes both scoreboard labels on the next native scoreboard refresh. Empty restores a native label. Names allow at most 64 UTF-8 bytes and no control characters.
