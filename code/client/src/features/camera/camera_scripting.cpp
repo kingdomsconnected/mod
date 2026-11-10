@@ -129,6 +129,16 @@ namespace KCDC::Scripting {
                 FloatOption(isolate, bag, "distance", options.distance);
                 FloatOption(isolate, bag, "height", options.height);
                 FloatOption(isolate, bag, "shoulder", options.shoulder);
+                FloatOption(isolate, bag, "sensitivity", options.orbitOptions.sensitivity);
+                FloatOption(isolate, bag, "turnRate", options.orbitOptions.turnRate);
+                v8::Local<v8::Context> context = isolate->GetCurrentContext();
+                v8::Local<v8::Value> flag;
+                if (bag->Get(context, v8pp::to_v8(isolate, "orbit")).ToLocal(&flag) && !flag->IsUndefined()) {
+                    options.orbit = flag->BooleanValue(isolate);
+                }
+                if (bag->Get(context, v8pp::to_v8(isolate, "headLook")).ToLocal(&flag) && !flag->IsUndefined()) {
+                    options.orbitOptions.headLook = flag->BooleanValue(isolate);
+                }
             }
             camera.EnableThirdPerson(options);
         }
@@ -176,6 +186,12 @@ namespace KCDC::Scripting {
             auto *app = KCDC::Core::gApplication.get();
             info.GetReturnValue().Set(app != nullptr && app->GetCameraControl().IsThirdPerson());
         }
+
+        // JS: Camera.isOrbiting() -> boolean
+        void JS_IsOrbiting(const v8::FunctionCallbackInfo<v8::Value> &info) {
+            auto *app = KCDC::Core::gApplication.get();
+            info.GetReturnValue().Set(app != nullptr && app->GetCameraControl().IsOrbiting());
+        }
     } // namespace
 
     void RegisterCamera(v8::Isolate *isolate, v8::Local<v8::Object> global) {
@@ -212,12 +228,15 @@ namespace KCDC::Scripting {
 
         camera.function("setThirdPerson", &JS_SetThirdPerson,
             v8pp::metadata::docs("void",
-                {v8pp::metadata::param("options", "{ distance?: number; height?: number; shoulder?: number } | null", true,
-                    "Where the camera sits, in metres: `distance` back from the body along where the player looks (3.5 by default, 0.3 to 20), `height` of the point it orbits above the body's feet (1.6, up to 5 either way), and `shoulder` to the right of it, negative for the left (0, up to 3 either way). Null hands the view back to the game's own camera. Called again while on, it only moves the camera.")},
-                "Puts this player's camera behind them, for as long as it is on.\n\nThe game has no third-person view to switch to, so this is a camera of the mod's own, placed every frame behind the body along the direction the player is looking. Nothing about their controls changes: they walk and turn as they did, and the mouse still turns the body. When a wall is behind them the camera comes in along the same line rather than going through it. Their head, which the game keeps out of its own first person, is drawn for as long as this camera is the one looking at them.\n\nThis is what a disguised player needs -- `player.setDisguise` hides the body the game's own camera sits in. It is this client's own view, so a gamemode turns it on from a client script, typically on an event the server sends the disguised player.\n\nThere is one view to draw through: `NoClip` cannot start while this holds it, and while `NoClip` flies this waits. The map, the inventory and the other pause-screen pages are filmed by the game's own camera, so this steps aside while one is open and comes back when it closes. It lasts until the session ends."));
+                {v8pp::metadata::param("options", "{ distance?: number; height?: number; shoulder?: number; orbit?: boolean; sensitivity?: number; turnRate?: number; headLook?: boolean } | null", true,
+                    "Where the camera sits, in metres: `distance` back from the body along where the player looks (3.5 by default, 0.3 to 20), `height` of the point it orbits above the body's feet (1.6, up to 5 either way), and `shoulder` to the right of it, negative for the left (0, up to 3 either way). `orbit` makes the mouse turn the camera around the body instead of the body, off by default; with it, `sensitivity` multiplies how far the mouse turns the camera (1 by default, 0.05 to 10), `turnRate` is how fast the body turns toward where it walks, in degrees a second (540, 60 to 3600), and `headLook` is whether the head follows the camera (true). Null hands the view back to the game's own camera. Called again while on, it only moves the camera and takes the new settings.")},
+                "Puts this player's camera behind them, for as long as it is on.\n\nThe game has no third-person view to switch to, so this is a camera of the mod's own, placed every frame behind the body along the direction the player is looking. Nothing about their controls changes: they walk and turn as they did, and the mouse still turns the body. With `orbit` the mouse turns the camera alone: the body keeps its facing while the player looks around it, its head turning to follow as far as a neck goes, and the move keys are read around the camera -- the body turns to the direction held and walks there. Everybody else sees the same body and the same head. The look goes back to the game, body and camera facing one way again, in the saddle, with a weapon or fists up, on a seat or a lean, and while a shot films. When a wall is behind them the camera comes in along the same line rather than going through it. Their head, which the game keeps out of its own first person, is drawn for as long as this camera is the one looking at them.\n\nThis is what a disguised player needs -- `player.setDisguise` hides the body the game's own camera sits in. It is this client's own view, so a gamemode turns it on from a client script, typically on an event the server sends the disguised player.\n\nThere is one view to draw through: `NoClip` cannot start while this holds it, and while `NoClip` flies this waits. The map, the inventory and the other pause-screen pages are filmed by the game's own camera, so this steps aside while one is open and comes back when it closes. It lasts until the session ends."));
 
         camera.function("isThirdPerson", &JS_IsThirdPerson,
             v8pp::metadata::docs("boolean", {}, "Whether `setThirdPerson` is on.", "True from `setThirdPerson` until it is turned off, also while it waits for a body or for `NoClip`."));
+
+        camera.function("isOrbiting", &JS_IsOrbiting,
+            v8pp::metadata::docs("boolean", {}, "Whether the mouse is turning the third-person camera around the body right now.", "True while `setThirdPerson` is on with `orbit` and the look is the camera's; false whenever the look is back with the game -- in the saddle, with a weapon up, on a seat, during a shot."));
 
         camera.function("setShot", &JS_SetShot,
             v8pp::metadata::docs("boolean",

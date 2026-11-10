@@ -746,6 +746,13 @@ namespace KCDC::Features::Player {
             const SDK::Matrix34 &view = SDK::ISystem::GetInstance()->GetViewCamera().GetMatrix();
             direction                 = glm::vec3(view.m[0][1], view.m[1][1], view.m[2][1]);
         }
+        // Orbiting, the body is held as well and the camera turns alone
+        // (Camera::OrbitCamera). What the head follows is the camera's
+        // direction bounded to what a neck does, and that bound is the
+        // orbit's own figure, so every copy's head turns as far as this one.
+        else if (KCDC::Core::gApplication->GetCameraControl().IsOrbiting()) {
+            direction = KCDC::Common::ToGlm(KCDC::Core::gApplication->GetCameraControl().GetOrbitHeadLook());
+        }
         const float length = glm::length(direction);
         if (!KCDC::Common::IsFinite(direction) || !std::isfinite(length) || length < 0.001F) {
             return;
@@ -1267,7 +1274,20 @@ namespace KCDC::Features::Player {
         // look, as an NPC copy's is.
         const bool riding        = KCDC::Core::gApplication->GetHorseService().SeatOf(_entityId) != 0;
         const bool sittingOnSeat = bodyStance.stance == Shared::Game::BodyStance::Sitting;
-        const bool lookOwned     = KCDC::Features::Cart::CartService::Get().IsInCart(_entityId) || riding || sittingOnSeat || leaning;
+        // An owner orbiting their camera publishes a look that leaves their
+        // body's facing, which a look out of a body the mouse turns never
+        // does beyond its frame's offset: the gap is the signal, so nothing
+        // new travels. Wider to start than to keep, so a head at the edge
+        // does not flicker, and never with a weapon up, where the fight owns
+        // the look.
+        constexpr float kLookAsideStart = 0.26F;
+        constexpr float kLookAsideKeep  = 0.10F;
+        // The look's own yaw: zero faces +Y and a rising yaw swings left, as the pose's does.
+        const float lookAsideGap        = headLookReady ? std::atan2(-headLookDirection.x, headLookDirection.y) - Shared::Entities::HumanEntity::YawOf(orientation) : 0.0F;
+        const float lookAsideYaw        = std::fabs(std::atan2(std::sin(lookAsideGap), std::cos(lookAsideGap)));
+        const bool lookingAside         = !fistsUp && lookAsideYaw > (_lookAside ? kLookAsideKeep : kLookAsideStart);
+        _lookAside                      = lookingAside;
+        const bool lookOwned            = KCDC::Features::Cart::CartService::Get().IsInCart(_entityId) || riding || sittingOnSeat || leaning || lookingAside;
         if (SDK::IMovementController *movement = (lookOwned || _lookTargetApplied) ? actor->GetMovementController() : nullptr) {
             constexpr float kLookDistance = 10.0F;
             // The owner's look arrives at the pose rate and the look pose
@@ -1298,7 +1318,7 @@ namespace KCDC::Features::Player {
         // saddle -- the context is told one does as it updates
         // (NativePlayerModule::SetLookHeld). On the frame they end the
         // request is put down once, as a leaving clip does.
-        const bool clipLook = riding || sittingOnSeat || leaning;
+        const bool clipLook = riding || sittingOnSeat || leaning || lookingAside;
         if (clipLook || _lookClipRequested) {
             KCDC::Features::Player::NativePlayerModule::SetLookHeld(_entityId, clipLook);
             SDK::CAnimatedCharacter *animated  = clipLook ? nullptr : actor->GetAnimatedCharacterRuntime();

@@ -2,6 +2,7 @@
 
 #include "core/feature_registry.h"
 #include "features/camera/anchor_camera.h"
+#include "features/camera/orbit_camera.h"
 
 #include "sdk/types.h"
 
@@ -59,6 +60,14 @@ namespace KCDC::Features::Camera {
 
         /** Sideways from the pivot, positive to the right: an over-the-shoulder offset. */
         float shoulder = 0.0F;
+
+        /**
+         * Whether the mouse turns the camera around the body instead of the
+         * body itself, which then turns only to walk; see OrbitCamera.
+         */
+        bool orbit = false;
+
+        OrbitOptions orbitOptions {};
     };
 
     /** A camera a script placed: where it stands, what it looks at, and how it gets there. */
@@ -156,6 +165,20 @@ namespace KCDC::Features::Camera {
             return _thirdPerson;
         }
 
+        /**
+         * Whether the orbit has the look right now. False with `orbit` asked
+         * for and the look handed back for a while: in the saddle, with a
+         * weapon up, on a seat.
+         */
+        bool IsOrbiting() const {
+            return _orbit.IsSteering();
+        }
+
+        /** Where the orbiting player's head is turned, for the look their body publishes. */
+        SDK::Vec3 GetOrbitHeadLook() const {
+            return _orbit.GetHeadLook();
+        }
+
         // --- Shots ----------------------------------------------------------
 
         /**
@@ -247,6 +270,12 @@ namespace KCDC::Features::Camera {
         /** Where the player's own eyes are and the way they look, as their body holds it. */
         bool OwnViewPose(SDK::Vec3 &eye, SDK::Vec3 &forward) const;
 
+        /** Gives the orbit the look or takes it back, and runs its frame. */
+        void SettleOrbit();
+
+        /** Whether the body is one the orbit may steer: on foot, hands down, its facing its own. */
+        bool OrbitMaySteer() const;
+
         /** The map editor or an Apse page has the one camera; see FollowBehind. */
         bool CameraMustYield() const;
 
@@ -285,6 +314,14 @@ namespace KCDC::Features::Camera {
 
         ThirdPersonOptions _thirdPersonOptions {};
         bool _thirdPerson = false;
+
+        OrbitCamera _orbit;
+
+        // Zero means "first frame of the orbit", which travels no distance.
+        std::int64_t _orbitTickMicroseconds = 0;
+
+        // After the input could not be taken, when to ask again: not every frame.
+        std::int64_t _orbitRetryMicroseconds = 0;
 
         // A shot holds the view from SetShot until it has glided back. Its
         // glide runs from the pose the view had when it was asked for to the
