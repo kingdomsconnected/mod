@@ -18,6 +18,7 @@
 #include "prop_editor_objects.h"
 #include "prop_editor_patrols.h"
 #include "prop_editor_poses.h"
+#include "prop_editor_plants.h"
 #include "prop_editor_scene.h"
 #include "prop_editor_selection.h"
 
@@ -180,6 +181,10 @@ namespace KCDC::Features::Prop {
 
         /** Seconds between restarts of a one-shot effect, so it stays visible; 0 plays it once. */
         float oneShotRepeat = 3.0F;
+
+        /** Takes the level's low plants out from under each mesh, door, interactive object or item as it is placed, in the same undo step. */
+        bool flattenPlants = false;
+        PlantFlattening plants;
 
         bool operator==(const PlacementOptions &other) const = default;
     };
@@ -368,6 +373,7 @@ namespace KCDC::Features::Prop {
             PickAt,
             Focus,
             DropToGround,
+            FlattenPlants, // take the level's low plants out from under the selected placed objects; `value` the margin, `value2` the tallest plant taken
             Import,
             HideWorld,
             RestoreWorld,
@@ -479,6 +485,14 @@ namespace KCDC::Features::Prop {
          * blueprints, and the level's entities of the same classes. Game thread.
          */
         void CollectPoseAnchors(const SDK::Vec3 &centre, float radius, std::vector<PoseAnchor> &anchors) const;
+
+        /**
+         * Takes out of the world the level's plants rooted under a placed
+         * object, as `options` chooses them, adding one hide per plant to
+         * `step`. Returns how many went. Nothing goes while Default is hidden
+         * or locked, where newly adopted level objects belong.
+         */
+        std::size_t FlattenPlantsUnder(std::uint64_t placedId, const PlantFlattening &options, HistoryStep &step);
 
         /** Re-reads what the cursor rests on. Throttled; game thread. */
         void RefreshHover();

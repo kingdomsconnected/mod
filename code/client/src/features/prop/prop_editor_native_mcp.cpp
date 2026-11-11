@@ -113,6 +113,10 @@ namespace KCDC::Features::Prop {
             add(name, "Apply the named editor action to explicit object IDs. Native work completes asynchronously.", false, {{"ids", ids}}, {"ids"});
         }
         add("wb_objects_convert", "Replace adopted level objects with editable static props of the same catalog mesh: each original is hidden and a prop placed at its pose, as one undo step. Fails when any object has no catalog mesh.", false, {{"ids", ids}}, {"ids"});
+        add("wb_plants_flatten",
+            "Take the level's low plants out of the world under placed props, doors, smart objects or items: every plant the level placed as its own object, rooted in an object's footprint grown by `margin` metres (0.25 by default) and no taller than `maxHeight` "
+            "(3 by default). One undo step; the plants become hidden level edits, which the export carries. The tall grass is merged into the terrain, is not an object and stays. Returns how many went and their IDs.",
+            false, {{"ids", ids}, {"margin", Number(PlantFlattening::kMinMargin, PlantFlattening::kMaxMargin)}, {"maxHeight", Number(PlantFlattening::kMinMaxHeight, PlantFlattening::kMaxMaxHeight)}}, {"ids"});
         add("wb_prop_physics_set", "Change a prop's physics and rebuild its native entity.", false, {{"id", Text()}, {"physics", physics}}, {"id", "physics"});
         add("wb_prop_collision_rebuild", "Rebuild a prop's collision from its current scale.", false, {{"id", Text()}}, {"id"});
         add("wb_selection_get", "Read native object, authored area and patrol selections.", true);
@@ -760,6 +764,39 @@ namespace KCDC::Features::Prop {
                 }
                 result = describe(target);
             }
+            else if (name == "wb_plants_flatten") {
+                PlantFlattening options;
+                options.margin    = args.value("margin", options.margin);
+                options.maxHeight = args.value("maxHeight", options.maxHeight);
+                std::vector<SelectionRef> targets;
+                std::unordered_set<std::string> seen;
+                for (const auto &value : args.at("ids")) {
+                    if (!seen.insert(value.get<std::string>()).second) {
+                        throw std::runtime_error("Object IDs must be unique");
+                    }
+                    targets.push_back(ref(value));
+                    if (targets.back().kind != SelectionKind::Placed) {
+                        throw std::runtime_error("Plants are flattened under placed props, doors, smart objects and items only; nothing was changed");
+                    }
+                }
+                const auto *defaultLayer = editor._layers.Find("default");
+                if (!defaultLayer->visible || defaultLayer->locked) {
+                    throw std::runtime_error("Default layer is hidden or locked.");
+                }
+                HistoryStep step;
+                step.label = "MCP flatten plants";
+                for (const SelectionRef &target : targets) {
+                    editor.FlattenPlantsUnder(target.id, options, step);
+                }
+                auto flattenedIds = nlohmann::json::array();
+                for (const HistoryAction &action : step.actions) {
+                    flattenedIds.push_back(id(SelectionKind::World, action.id));
+                }
+                if (!step.actions.empty()) {
+                    editor._history.Record(std::move(step), &editor._layers);
+                }
+                result = {{"flattened", flattenedIds.size()}, {"ids", std::move(flattenedIds)}};
+            }
             else if (name == "wb_select_similar" || name == "wb_select_in_radius" || name == "wb_select_brush" || name == "wb_select_in_rect" || name == "wb_select_in_polygon" || name == "wb_select_in_area") {
                 SelectionQuery query;
                 std::string error;
@@ -1262,7 +1299,7 @@ namespace KCDC::Features::Prop {
                 for (const auto &entry : args.at("steps")) {
                     const auto toolName                           = entry.at("tool").get<std::string>();
                     static constexpr std::string_view supported[] = {"wb_objects_query", "wb_object_get", "wb_props_create", "wb_effects_create", "wb_lights_create", "wb_light_update", "wb_objects_transform", "wb_effect_update", "wb_prop_physics_set", "wb_prop_collision_rebuild",
-                        "wb_object_settings_update", "wb_objects_duplicate", "wb_objects_convert", "wb_objects_delete", "wb_objects_drop_to_ground", "wb_groups_update", "wb_level_objects_query", "wb_level_object_get", "wb_level_object_update", "wb_level_edits_restore",
+                        "wb_object_settings_update", "wb_objects_duplicate", "wb_objects_convert", "wb_objects_delete", "wb_objects_drop_to_ground", "wb_plants_flatten", "wb_groups_update", "wb_level_objects_query", "wb_level_object_get", "wb_level_object_update", "wb_level_edits_restore",
                         "wb_camera_set", "wb_camera_frame", "wb_raycast", "wb_pose_anchors_query", "wb_pick_at", "wb_ground_probe", "wb_project_points"};
                     if (std::find(std::begin(supported), std::end(supported), toolName) == std::end(supported)) {
                         throw std::runtime_error("Tool is not supported inside a batch: " + toolName);

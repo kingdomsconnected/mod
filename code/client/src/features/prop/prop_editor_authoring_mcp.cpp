@@ -60,7 +60,8 @@ namespace KCDC::Features::Prop {
         }
         Json PlacementSchema() {
             return Object({{"physics", Enum({"rigid", "static", "none"})}, {"alignToSurface", Boolean()}, {"snapToGrid", Boolean()}, {"gridStep", Number(0.1, 50)}, {"randomYaw", Boolean()}, {"randomScale", Boolean()}, {"scaleMin", Number(0.05, 20)},
-                {"scaleMax", Number(0.05, 20)}, {"heightOffset", Number(-20, 20)}, {"fallbackDistance", Number(0.5, 200)}, {"effectTuning", TuningSchema()}, {"oneShotRepeat", Number(0, 30)}});
+                {"scaleMax", Number(0.05, 20)}, {"heightOffset", Number(-20, 20)}, {"fallbackDistance", Number(0.5, 200)}, {"effectTuning", TuningSchema()}, {"oneShotRepeat", Number(0, 30)},
+                {"flattenPlants", Boolean()}, {"plantMargin", Number(PlantFlattening::kMinMargin, PlantFlattening::kMaxMargin)}, {"plantMaxHeight", Number(PlantFlattening::kMinMaxHeight, PlantFlattening::kMaxMaxHeight)}});
         }
         Json ViewSchema() {
             return Object({{"name", Text(256)}, {"position", VectorSchema()}, {"yawDegrees", Number(-360, 360)}, {"pitchDegrees", Number(-89, 89)}});
@@ -85,7 +86,8 @@ namespace KCDC::Features::Prop {
         }
         Json Placement(const PlacementOptions &p) {
             return {{"physics", KCDC::Common::Spawn::PropPhysicsToString(p.physics)}, {"alignToSurface", p.alignToSurface}, {"snapToGrid", p.snapToGrid}, {"gridStep", p.gridStep}, {"randomYaw", p.randomYaw}, {"randomScale", p.randomScale}, {"scaleMin", p.scaleMin},
-                {"scaleMax", p.scaleMax}, {"heightOffset", p.heightOffset}, {"fallbackDistance", p.fallbackDistance}, {"effectTuning", Tuning(p.effectTuning)}, {"oneShotRepeat", p.oneShotRepeat}};
+                {"scaleMax", p.scaleMax}, {"heightOffset", p.heightOffset}, {"fallbackDistance", p.fallbackDistance}, {"effectTuning", Tuning(p.effectTuning)}, {"oneShotRepeat", p.oneShotRepeat},
+                {"flattenPlants", p.flattenPlants}, {"plantMargin", p.plants.margin}, {"plantMaxHeight", p.plants.maxHeight}};
         }
         Json Asset(const AssetLibraryItem &item) {
             std::string model;
@@ -441,6 +443,9 @@ namespace KCDC::Features::Prop {
                 draft.heightOffset     = value.at("heightOffset").get<float>();
                 draft.fallbackDistance = value.at("fallbackDistance").get<float>();
                 draft.oneShotRepeat    = value.at("oneShotRepeat").get<float>();
+                draft.flattenPlants    = value.at("flattenPlants").get<bool>();
+                draft.plants.margin    = value.at("plantMargin").get<float>();
+                draft.plants.maxHeight = value.at("plantMaxHeight").get<float>();
                 draft.effectTuning     = Shared::WorldBuilder::ReadTuning(value.at("effectTuning"));
                 Require(draft.scaleMin <= draft.scaleMax, "scaleMin must not exceed scaleMax.");
                 Require(draft.effectTuning.IsSane(), "Invalid effect tuning.");

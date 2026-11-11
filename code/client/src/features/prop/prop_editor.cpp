@@ -1010,6 +1010,7 @@ namespace KCDC::Features::Prop {
             case CommandKind::RestoreWorld:
             case CommandKind::RestoreAllWorld:
             case CommandKind::DropToGround:
+            case CommandKind::FlattenPlants:
             case CommandKind::PlaceLight:
             case CommandKind::SetLightTuning:
             case CommandKind::SetEffectTuning:
@@ -1759,6 +1760,9 @@ namespace KCDC::Features::Prop {
             HistoryStep step;
             step.label = "Place " + worldObject->name;
             AppendPlaced(step, SelectionKind::Placed, placed);
+            if (_placement.flattenPlants) {
+                FlattenPlantsUnder(placed, _placement.plants, step);
+            }
             _history.Record(std::move(step), &_layers);
             std::snprintf(message, sizeof(message), "Placed %s #%llu at %.1f, %.1f, %.1f -- its settings are in the Object tab", PlacedKindLabel(worldObject->kind), static_cast<unsigned long long>(placed), _armedPosition.x, _armedPosition.y, _armedPosition.z);
             SetStatus(message);
@@ -1779,11 +1783,50 @@ namespace KCDC::Features::Prop {
         HistoryStep step;
         step.label = "Place " + std::string {model->name};
         AppendPlaced(step, SelectionKind::Placed, placed);
+        if (_placement.flattenPlants) {
+            FlattenPlantsUnder(placed, _placement.plants, step);
+        }
         _history.Record(std::move(step), &_layers);
         std::snprintf(message, sizeof(message), "Placed #%llu at %.1f, %.1f, %.1f", static_cast<unsigned long long>(placed), _armedPosition.x, _armedPosition.y, _armedPosition.z);
         SetStatus(message);
 
         RollBrush();
+    }
+
+    std::size_t MapEditor::FlattenPlantsUnder(std::uint64_t placedId, const PlantFlattening &options, HistoryStep &step) {
+        const auto *defaultLayer = _layers.Find("default");
+        SDK::AABB bounds {};
+        if (!options.IsSane() || !defaultLayer->visible || defaultLayer->locked || !_scene.LiveBounds(placedId, bounds)) {
+            return 0;
+        }
+
+        // The octree lists every plant in the column, collider or none; a ray would miss the ones without.
+        const SDK::AABB sweep = PlantSweepBox(bounds, options);
+        std::vector<LevelCandidate> candidates;
+        bool truncated = false;
+        _world.Collect(sweep, candidates, truncated);
+
+        std::size_t flattened = 0;
+        for (const LevelCandidate &candidate : candidates) {
+            if (candidate.kind != SelectableKinds::Vegetation || candidate.hidden || !IsFlattenedPlant(sweep, candidate.position, candidate.bounds, candidate.hasBounds, options)) {
+                continue;
+            }
+            const std::uint64_t id = _world.Adopt(candidate.pick);
+            const WorldEdit *edit  = id != 0 ? _world.Find(id) : nullptr;
+            if (edit == nullptr || edit->hidden || !CanEdit({SelectionKind::World, id})) {
+                continue;
+            }
+            HistoryAction action;
+            action.kind         = HistoryAction::Kind::WorldHide;
+            action.id           = id;
+            action.hiddenBefore = false;
+            action.hiddenAfter  = true;
+            if (_world.SetHidden(id, true)) {
+                step.actions.push_back(std::move(action));
+                ++flattened;
+            }
+        }
+        return flattened;
     }
 
     void MapEditor::AppendPlaced(HistoryStep &step, SelectionKind kind, std::uint64_t id) const {
@@ -2173,6 +2216,7 @@ namespace KCDC::Features::Prop {
         case CommandKind::ConvertSelection:
         case CommandKind::GroupSelection:
         case CommandKind::DropToGround:
+        case CommandKind::FlattenPlants:
             for (const auto &ref : SelectionRefs()) {
                 if (!CanEdit(ref)) {
                     SetStatus("Selection includes a hidden or locked layer.");
@@ -2954,6 +2998,34 @@ namespace KCDC::Features::Prop {
                 ClearSelection();
             }
             std::snprintf(message, sizeof(message), "Nothing under the cursor (weighed %d level object%s)", picked.inspected, picked.inspected == 1 ? "" : "s");
+            SetStatus(message);
+            break;
+        }
+
+        case CommandKind::FlattenPlants: {
+            PlantFlattening options;
+            options.margin    = command.value;
+            options.maxHeight = command.value2;
+            HistoryStep step;
+            step.label            = "Flatten plants";
+            std::size_t objects   = 0;
+            std::size_t flattened = 0;
+            for (const SelectionRef &ref : SelectionRefs()) {
+                if (ref.kind == SelectionKind::Placed) {
+                    ++objects;
+                    flattened += FlattenPlantsUnder(ref.id, options, step);
+                }
+            }
+            if (objects == 0) {
+                SetStatus("Select something you placed to flatten the plants under it");
+                break;
+            }
+            if (flattened == 0) {
+                SetStatus("None of the level's low plants stand under the selection -- grass merged into the terrain is not an object and stays");
+                break;
+            }
+            _history.Record(std::move(step), &_layers);
+            std::snprintf(message, sizeof(message), "Took %zu plant%s out from under %zu object%s -- Ctrl+Z puts them back", flattened, flattened == 1 ? "" : "s", objects, objects == 1 ? "" : "s");
             SetStatus(message);
             break;
         }
@@ -4749,6 +4821,14 @@ namespace KCDC::Features::Prop {
         ImGui::SetNextItemWidth(120.0F);
         ImGui::DragFloat("Fallback distance", &_placementDraft.fallbackDistance, 0.25F, 0.5F, 200.0F, "%.1f m");
         HelpMarker("How far ahead a mesh goes when the cursor points at nothing, e.g. the sky.");
+
+        ImGui::Checkbox("Flatten the level's plants under it", &_placementDraft.flattenPlants);
+        HelpMarker("Takes the level's low plants out from under each object as it is placed, in the same undo step,\nso grass and flowers do not grow through a floor. Exported as level edits.\nGrass merged into the terrain is not an object and stays.");
+        ImGui::SetNextItemWidth(120.0F);
+        ImGui::DragFloat("Plant margin", &_placementDraft.plants.margin, 0.05F, PlantFlattening::kMinMargin, PlantFlattening::kMaxMargin, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetNextItemWidth(120.0F);
+        ImGui::DragFloat("Tallest plant taken", &_placementDraft.plants.maxHeight, 0.05F, PlantFlattening::kMinMaxHeight, PlantFlattening::kMaxMaxHeight, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
+        HelpMarker("The margin widens the object's footprint. Plants taller than the limit, such as trees, stay.\nBoth also apply to Flatten the plants under it in the Object tab.");
     }
 
     void MapEditor::RenderSceneTab(const EditorSnapshot &snapshot) {
@@ -5197,6 +5277,17 @@ namespace KCDC::Features::Prop {
                 command.kind = CommandKind::Duplicate;
                 command.id   = selection.id;
                 Queue(std::move(command));
+            }
+
+            if (ImGui::Button("Flatten the plants under it", ImVec2(-1.0F, 0.0F))) {
+                Command command;
+                command.kind   = CommandKind::FlattenPlants;
+                command.value  = _placementDraft.plants.margin;
+                command.value2 = _placementDraft.plants.maxHeight;
+                Queue(std::move(command));
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                ImGui::SetTooltip("Takes the level's low plants out from under every selected object you placed, as one undo step.\nThe margin and the tallest plant taken are set under Placement in the Library tab.\nGrass merged into the terrain is not an object and stays.");
             }
 
             if (DangerButton("Delete [Del]", ImVec2(-1.0F, 0.0F))) {

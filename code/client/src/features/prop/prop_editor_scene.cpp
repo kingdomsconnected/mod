@@ -74,6 +74,24 @@ namespace KCDC::Features::Prop {
         return found != _objects.end() && found->id == id ? &*found : nullptr;
     }
 
+    bool EditorScene::LiveBounds(std::uint64_t id, SDK::AABB &bounds) const {
+        const PlacedObject *object = Find(id);
+        if (object == nullptr) {
+            return false;
+        }
+        if (object->kind == PlacedKind::SmartObject) {
+            const auto assembly = _assemblies.find(id);
+            return assembly != _assemblies.end() && assembly->second->Bounds(bounds) && IsUsableBounds(bounds);
+        }
+        auto *entitySystem   = SDK::IEntitySystem::GetInstance();
+        SDK::IEntity *entity = entitySystem != nullptr && object->entityId != 0 ? entitySystem->GetEntity(object->entityId) : nullptr;
+        if (entity == nullptr || entity->IsGarbage()) {
+            return false;
+        }
+        entity->GetWorldBounds(bounds);
+        return IsUsableBounds(bounds);
+    }
+
     std::uint64_t EditorScene::FindByEntityId(SDK::EntityId entityId) const {
         if (entityId == 0) {
             return 0;

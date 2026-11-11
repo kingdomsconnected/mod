@@ -129,6 +129,9 @@ namespace KCDC::Features::Prop {
 
         const PlacedObject *Find(std::uint64_t id) const;
 
+        /** An object's world box read off what stands for it now, without waiting for a refresh. False when it has none. */
+        bool LiveBounds(std::uint64_t id, SDK::AABB &bounds) const;
+
         /** The object built on `entityId`, or 0. */
         std::uint64_t FindByEntityId(SDK::EntityId entityId) const;
 

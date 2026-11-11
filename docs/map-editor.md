@@ -232,6 +232,31 @@ offset, and where it goes when the cursor points at the sky.
 If a model cannot create collision, placement with static or rigid physics
 fails with a message. Choose **None** to place it as decoration.
 
+**Flatten the level's plants under it**, in the Placement section, takes
+the level's low plants out of the world under each mesh, door, interactive
+object or item as you place it, so leaf litter, fallen branches, tufts and
+bushes do not come up through a floor. The plants and the placement are one
+undo step. **Plant margin** widens the footprint, and **Tallest plant
+taken** (3 m by default) keeps trees standing. The level's plant boxes are
+coarse: litter lying flat measures a metre and a pile of branches up to two
+and a half, which is why the default is not lower. For objects already placed, select them and click **Flatten
+the plants under it** in the Object tab: it uses the same two settings and
+is one undo step for the whole selection.
+
+A flattened plant is a level object taken out, like one you deleted: it is
+listed under **Level → Deleted**, where **Restore** brings it back, and the
+export carries it in the map's `world` entry, so a server running the
+export removes it for every player. Moving the object afterwards does not
+bring the plants back or flatten new ones.
+
+Only plants the level placed as objects of their own are reached -- the
+ones the selection brush takes with **Vegetation** ticked. The tall grass
+of a meadow or a forest floor is not among them: it is merged into the
+level's terrain detail, is not an object, and cannot be flattened, selected
+or deleted. In a forest clearing of the Trosky level, taking out every
+plant object within seven metres removed the litter, branches and bushes
+and left the grass standing.
+
 ### Doors, interactive objects and items
 
 The Library also lists three kinds of things the server builds as working

@@ -95,6 +95,7 @@ select an interior floor.
 | Selection and history          | Native objects, authored areas and routes; region selection (`wb_select_in_rect`, `wb_select_in_polygon`, `wb_select_in_radius`, `wb_select_brush`, `wb_select_in_area`, `wb_select_similar`) with a shared filter; shared undo/redo, which reselects what it changed |
 | Keys                           | Read and rebind the editor's keys, including the Default and W E R presets (`wb_keymap_get`, `wb_keymap_update`)                                                                                                                                                      |
 | Native level objects           | Nearby browse, inspect, adopt, transform, hide, swap for an asset-library mesh (`wb_level_object_update` with `model`), restore, and copy or convert into props (`wb_objects_duplicate`, `wb_objects_convert`)                                                        |
+| Plants under placed objects    | Take the level's low plants out from under placed objects (`wb_plants_flatten`), or as each is placed (`flattenPlants`, `plantMargin` and `plantMaxHeight` in `wb_placement_update`)                                                                                  |
 | Native areas                   | Query, inspect, point containment and copy into authored areas                                                                                                                                                                                                        |
 | Authored areas                 | Create, inspect, replace, duplicate, delete, groups and point containment                                                                                                                                                                                             |
 | Patrols                        | Route and point authoring, NPC role discovery, preview start/progress/stop                                                                                                                                                                                            |
@@ -283,6 +284,32 @@ discovery, schemas, resources, documentation and relevant tests together.
 Changes to existing contracts require an explicit migration or versioning
 decision. Contract tests live in the existing `KCDCTests` executable; the
 loopback HTTP suite runs as `KCDCTests --suite world-builder-mcp`.
+
+## Flattening plants under placed objects
+
+`wb_plants_flatten` takes the level's low plants out of the world under
+placed props, doors, smart objects and items. `ids` names them; a level
+object, effect or light ID is refused and nothing changes. A plant goes when
+the level placed it as an object of its own, it is rooted in an object's
+world footprint grown by `margin` metres (0 to 5, 0.25 by default), from
+2 m under the object's lowest point to its top, and its own box is no
+taller than `maxHeight` (0.1 to 6, 3 by default). The result has
+`flattened`, the count, and `ids`, the adopted level object IDs, which
+`wb_level_edits_restore` gives back. The whole call is one undo step and
+none when nothing went. It is refused while the Default layer is hidden or
+locked, since newly adopted level objects belong to it.
+
+The plants become hidden level edits: `wb_objects_query` lists them, a
+project saves them, and an export carries them in `world`. The tall grass
+is merged into the level's terrain detail, is not an object and cannot be
+reached: expect litter, branches, tufts and bushes to go, and grass to
+stay.
+
+`wb_placement_get` and `wb_placement_update` carry the same behaviour for
+interactive placement: `flattenPlants` (false by default) flattens under
+each object as the brush places it, in the placement's own undo step, with
+`plantMargin` and `plantMaxHeight`. `wb_props_create` does not flatten;
+call `wb_plants_flatten` with the new ID.
 
 ## Viewport settings, project favorites, and layers
 
