@@ -154,6 +154,10 @@ namespace KCDC::Features::Prop {
         add("wb_camera_set", "Set camera position, angles, movement speed or field of view.", false, {{"position", Vector(3)}, {"yaw", Number(-36000, 36000)}, {"pitch", Number(-89, 89)}, {"fov", Number(20, 140)}, {"speed", Number(0.05F, 400)}});
         add("wb_camera_frame", "Frame a world position or current native selection.", false, {{"position", Vector(3)}, {"distance", Number(0.1F, 10000)}});
         add("wb_raycast", "Cast a bounded ray using the editor's native picking system.", true, {{"origin", Vector(3)}, {"direction", Vector(3, -1, 1)}, {"distance", Number(0.01F, 5000)}}, {"origin", "direction"});
+        add("wb_pick_at",
+            "What a viewport click at a screen point in normalized device coordinates would select, without selecting it. A solid object is found where the ray strikes its collision; an object without collision by its oriented box in front of that surface. `kind` is prop, "
+            "effect, light, level, terrain or none; `by` is collision or bounds; `id` is set for a prop, effect, light or an adopted level object.",
+            true, {{"aim", ndcPoint}}, {"aim"});
         add("wb_ground_probe", "Probe terrain and native collision below explicit positions.", true, {{"points", {{"type", "array"}, {"minItems", 1}, {"maxItems", 256}, {"items", Vector(3)}}}}, {"points"});
         add("wb_project_points", "Project world points into normalized screen coordinates through the active native camera.", true, {{"points", {{"type", "array"}, {"minItems", 1}, {"maxItems", 256}, {"items", Vector(3)}}}}, {"points"});
         for (const char *name : {"wb_operation_get", "wb_operation_wait"}) {
@@ -1176,6 +1180,52 @@ namespace KCDC::Features::Prop {
                 const bool hit = pick.kind != WorldPickKind::None;
                 result         = {{"hit", hit}, {"kind", WorldPickKindToString(pick.kind)}, {"position", hit ? Vec(pick.hitPoint) : nlohmann::json(nullptr)}, {"distance", hit ? nlohmann::json(pick.distance) : nlohmann::json(nullptr)}, {"name", label}, {"detail", detail}};
             }
+            else if (name == "wb_pick_at") {
+                if (!editor._camera.IsActive()) {
+                    throw std::runtime_error("Open the editor and wait for its camera to become active");
+                }
+                const MapEditor::PickResult picked = editor.PickThrough(Camera::RayThroughNdc(editor._camera.GetPose(), args.at("aim").at(0).get<float>(), args.at("aim").at(1).get<float>()), PickEffort::Thorough);
+                result                             = {{"hit", false}, {"kind", "none"}, {"id", nullptr}, {"by", nullptr}, {"name", ""}, {"detail", ""}, {"position", nullptr}, {"distance", nullptr}};
+                const auto found                   = [&](const char *kind, const char *by) {
+                    result["hit"]      = true;
+                    result["kind"]     = kind;
+                    result["by"]       = by;
+                    result["position"] = Vec(picked.point);
+                    result["distance"] = picked.distance;
+                };
+                if (picked.light != 0) {
+                    found("light", "bounds");
+                    result["id"]   = id(SelectionKind::Light, picked.light);
+                    result["name"] = "Point light";
+                }
+                else if (picked.effect != 0) {
+                    found("effect", "bounds");
+                    result["id"] = id(SelectionKind::Effect, picked.effect);
+                    if (const PlacedEffect *effect = editor._effects.Find(picked.effect)) {
+                        result["name"]   = effect->label;
+                        result["detail"] = effect->name;
+                    }
+                }
+                else if (picked.placed != 0) {
+                    found("prop", picked.placedMethod == PlacedPickMethod::Collision ? "collision" : "bounds");
+                    result["id"] = id(SelectionKind::Placed, picked.placed);
+                    if (const PlacedObject *object = editor._scene.Find(picked.placed)) {
+                        result["name"]   = object->name;
+                        result["detail"] = object->model;
+                    }
+                }
+                else if (picked.world.kind != WorldPickKind::None) {
+                    const bool object = picked.world.kind == WorldPickKind::RenderNode || picked.world.kind == WorldPickKind::Entity;
+                    found(object ? "level" : picked.world.kind == WorldPickKind::Terrain ? "terrain" : "none", picked.world.boundsOnly ? "bounds" : "collision");
+                    std::string label, detail;
+                    DescribeWorldPick(picked.world, label, detail);
+                    result["name"]   = label;
+                    result["detail"] = detail;
+                    if (const std::uint64_t adopted = editor._world.FindByPick(picked.world)) {
+                        result["id"] = id(SelectionKind::World, adopted);
+                    }
+                }
+            }
             else if (name == "wb_ground_probe" || name == "wb_project_points") {
                 result["points"] = nlohmann::json::array();
                 for (const auto &value : args.at("points")) {
@@ -1199,7 +1249,7 @@ namespace KCDC::Features::Prop {
                     const auto toolName                           = entry.at("tool").get<std::string>();
                     static constexpr std::string_view supported[] = {"wb_objects_query", "wb_object_get", "wb_props_create", "wb_effects_create", "wb_lights_create", "wb_light_update", "wb_objects_transform", "wb_effect_update", "wb_prop_physics_set", "wb_prop_collision_rebuild",
                         "wb_object_settings_update", "wb_objects_duplicate", "wb_objects_convert", "wb_objects_delete", "wb_objects_drop_to_ground", "wb_groups_update", "wb_level_objects_query", "wb_level_object_get", "wb_level_object_update", "wb_level_edits_restore",
-                        "wb_camera_set", "wb_camera_frame", "wb_raycast", "wb_ground_probe", "wb_project_points"};
+                        "wb_camera_set", "wb_camera_frame", "wb_raycast", "wb_pick_at", "wb_ground_probe", "wb_project_points"};
                     if (std::find(std::begin(supported), std::end(supported), toolName) == std::end(supported)) {
                         throw std::runtime_error("Tool is not supported inside a batch: " + toolName);
                     }

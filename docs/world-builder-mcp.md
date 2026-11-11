@@ -100,7 +100,7 @@ select an interior floor.
 | Patrols                        | Route and point authoring, NPC role discovery, preview start/progress/stop                                                                                                                                                                                            |
 | Camera                         | Read/set, frame, saved views and restore                                                                                                                                                                                                                              |
 | Environment                    | Preview conditions (hour, clock speed, sky preset, rain), level preset and profile discovery, and the game's own clock                                                                                                                                                |
-| Spatial queries                | Raycast, ground probe and point projection                                                                                                                                                                                                                            |
+| Spatial queries                | Raycast, what a click at a screen point would select (`wb_pick_at`), ground probe and point projection                                                                                                                                                                |
 | Projects                       | New/open/save/recover, metadata, document inspection/import/validation and file listing                                                                                                                                                                               |
 | Outputs                        | Blueprint save/place, world resource export and server API export                                                                                                                                                                                                     |
 | Diagnostics                    | Operations, bounded audit log and viewport PNG capture                                                                                                                                                                                                                |
@@ -299,6 +299,29 @@ viewport clicks, hover, and `wb_raycast`; update it with
 `wb_viewport_update({"settings":{"pickPreferPhysics":false}})`.
 Anonymous level-brush colliders now resolve to their mesh and placement;
 `wb_raycast` keeps its existing response schema.
+
+`wb_pick_at` answers what a viewport click would select, without selecting
+it. It takes `aim`, a screen point in normalized device coordinates (-1 to
+1, +y up) through the editor camera, and returns `hit`, `kind` (`prop`,
+`effect`, `light`, `level`, `terrain` or `none`), `by` (`collision` or
+`bounds`), `id`, `name`, `detail`, `position` and `distance`. `id` is the
+opaque object ID of a prop, effect, light or adopted level object, and
+`null` for a level object not yet adopted and for terrain. It resolves a
+click the way the viewport does:
+
+- A solid object the editor placed is found where the ray strikes its
+  collision (`by: collision`), never because the ray crossed its bounding
+  box.
+- An object without collision is found by its oriented box (`by: bounds`)
+  when the ray enters it in front of the struck surface. A box containing
+  the camera is not taken, and a smaller placed object struck behind a
+  larger box keeps the pick.
+- A solid placed object is offered by its oriented box only when the ray
+  struck no placed object and the struck point lies outside that box.
+
+`wb_raycast` is unchanged: it reports the level and collision under a ray
+and applies none of these rules to placed objects' boxes. `wb_select_brush`
+takes what `wb_pick_at` reports for the same `aim`.
 
 `wb_level_object_update` takes `model`, a mesh path from the asset library,
 to swap a level object for that mesh: the object goes out of the world with

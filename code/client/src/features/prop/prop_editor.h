@@ -444,9 +444,19 @@ namespace KCDC::Features::Prop {
             std::uint64_t placed = 0;
             WorldPick world;    // the level's own -- or terrain, or a solid nothing can select -- when it is nearer than the editor's
             SDK::Vec3 point {}; // where the ray meets what was picked
-            int inspected = 0;  // level objects the octree weighed
+            float distance = 0.0F;
+            int inspected  = 0; // level objects the octree weighed
+            /** How `placed` was found: by its collider, or by its box where it has none to ask. */
+            PlacedPickMethod placedMethod = PlacedPickMethod::None;
         };
         PickResult PickThrough(const SDK::Vec3 &heading, PickEffort effort);
+
+        /** The editor's own object and the level's under a ray from the editor camera, before effects and lights are weighed. */
+        struct ScenePick {
+            PlacedPick placed;
+            WorldPick world; // empty when the collider the ray struck is one of the editor's own
+        };
+        ScenePick PickScene(const SDK::Vec3 &heading, PickEffort effort);
 
         /** Re-reads what the cursor rests on. Throttled; game thread. */
         void RefreshHover();
@@ -709,6 +719,9 @@ namespace KCDC::Features::Prop {
         EditorLayers _layers;
         std::shared_ptr<const EditorLayers> _layersPublished = std::make_shared<const EditorLayers>();
         EditorScene _scene;
+
+        /** Reused between picks so one does not allocate. */
+        std::vector<PlacedPickBox> _pickBoxes;
         KCDC::Features::Area::AreaCollisionService _areaCollision;
         std::atomic<std::uint64_t> _collisionContext {1};
         std::map<std::uint64_t, std::string> _collisionResults;

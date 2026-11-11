@@ -497,23 +497,37 @@ namespace KCDC::Features::Prop {
         return false;
     }
 
+    MapEditor::ScenePick MapEditor::PickScene(const SDK::Vec3 &heading, PickEffort effort) {
+        const KCDC::Features::Camera::CameraPose &pose = _camera.GetPose();
+        ScenePick result;
+
+        // The level's bounds passes leave the editor's objects out: their boxes are weighed below, against what the ray struck.
+        result.world = _world.Pick(pose.position, heading, kPickRange, effort, _viewport.pickPreferPhysics, &_scene.OwnedEntities());
+
+        PickSurface surface;
+        surface.hit      = result.world.kind != WorldPickKind::None && !result.world.boundsOnly;
+        surface.distance = result.world.distance;
+        surface.point    = result.world.hitPoint;
+
+        // Physics can return the entity; the octree returns its render node.
+        if (const std::uint64_t own = _scene.FindByPick(result.world)) {
+            surface.placed = CanEdit({SelectionKind::Placed, own}) ? own : 0;
+            result.world   = WorldPick {};
+        }
+
+        _scene.CollectPickBoxes(_pickBoxes, &_layers);
+        result.placed = ChoosePlacedPick(_pickBoxes, pose.position, heading, kPickRange, surface);
+        return result;
+    }
+
     MapEditor::PickResult MapEditor::PickThrough(const SDK::Vec3 &heading, PickEffort effort) {
         const KCDC::Features::Camera::CameraPose &pose = _camera.GetPose();
         PickResult result;
 
-        // The box test is what finds a prop spawned without physics.
-        float placedDistance    = kPickRange;
-        std::uint64_t placedHit = _scene.PickNearest(pose.position, heading, kPickRange, placedDistance, &_layers);
-        WorldPick worldHit      = _world.Pick(pose.position, heading, kPickRange, effort, _viewport.pickPreferPhysics);
-
-        // Physics can return the entity; the octree returns its render node.
-        if (const std::uint64_t own = _scene.FindByPick(worldHit)) {
-            if (CanEdit({SelectionKind::Placed, own}) && (placedHit == 0 || worldHit.distance <= placedDistance)) {
-                placedHit      = own;
-                placedDistance = worldHit.distance;
-            }
-            worldHit = WorldPick {};
-        }
+        const ScenePick scene         = PickScene(heading, effort);
+        const std::uint64_t placedHit = scene.placed.id;
+        const float placedDistance    = placedHit != 0 ? scene.placed.distance : kPickRange;
+        WorldPick worldHit            = scene.world;
 
         if (worldHit.kind != WorldPickKind::None) {
             const auto adopted       = _world.FindByPick(worldHit);
@@ -565,16 +579,18 @@ namespace KCDC::Features::Prop {
             result.effect = effectHit;
             distance      = effectDistance;
         }
-        // A tie goes to the editor's own object.
-        else if (worldHit.kind != WorldPickKind::None && (placedHit == 0 || worldHit.distance < placedDistance - 0.01F)) {
+        // The editor's object was chosen against the solid surface already; only a nearer box of the level's still outranks it.
+        else if (worldHit.kind != WorldPickKind::None && (placedHit == 0 || (worldHit.boundsOnly && worldHit.distance < placedDistance - 0.01F))) {
             result.world = worldHit;
             distance     = worldHit.distance;
         }
         else if (placedHit != 0) {
-            result.placed = placedHit;
-            distance      = placedDistance;
+            result.placed       = placedHit;
+            result.placedMethod = scene.placed.method;
+            distance            = placedDistance;
         }
-        result.point = SDK::Vec3 {pose.position.x + heading.x * distance, pose.position.y + heading.y * distance, pose.position.z + heading.z * distance};
+        result.distance = distance;
+        result.point    = SDK::Vec3 {pose.position.x + heading.x * distance, pose.position.y + heading.y * distance, pose.position.z + heading.z * distance};
         return result;
     }
 
@@ -3233,16 +3249,10 @@ namespace KCDC::Features::Prop {
         const KCDC::Features::Camera::CameraPose &pose = _camera.GetPose();
         const SDK::Vec3 heading                        = KCDC::Features::Camera::RayThroughNdc(pose, _cursorNdcX.load(std::memory_order_acquire), _cursorNdcY.load(std::memory_order_acquire));
 
-        float placedDistance    = kPickRange;
-        std::uint64_t placedHit = _scene.PickNearest(pose.position, heading, kPickRange, placedDistance, &_layers);
-        WorldPick worldHit      = _world.Pick(pose.position, heading, kPickRange, PickEffort::Quick, _viewport.pickPreferPhysics);
-        if (const auto own = _scene.FindByPick(worldHit)) {
-            if (placedHit == 0 || worldHit.distance <= placedDistance) {
-                placedHit      = own;
-                placedDistance = worldHit.distance;
-            }
-            worldHit = {};
-        }
+        const ScenePick scene         = PickScene(heading, PickEffort::Quick);
+        const std::uint64_t placedHit = scene.placed.id;
+        const float placedDistance    = placedHit != 0 ? scene.placed.distance : kPickRange;
+        const WorldPick &worldHit     = scene.world;
 
         _hover = HoverInfo {};
 
@@ -3271,7 +3281,7 @@ namespace KCDC::Features::Prop {
             return;
         }
 
-        const bool worldWins = worldHit.kind != WorldPickKind::None && (placedHit == 0 || worldHit.distance < placedDistance - 0.01F);
+        const bool worldWins = worldHit.kind != WorldPickKind::None && (placedHit == 0 || (worldHit.boundsOnly && worldHit.distance < placedDistance - 0.01F));
         if (placedHit != 0 && !worldWins) {
             const PlacedObject *object = _scene.Find(placedHit);
             if (object != nullptr) {

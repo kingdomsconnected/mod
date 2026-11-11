@@ -246,6 +246,28 @@ vegetation and entities. Ctrl+click adds to or takes out of the selection;
 the gizmo sits on the first and the rest follow it as one body -- moved,
 turned about it and scaled from it.
 
+A click selects what the cursor is on, not what it is near:
+
+- A solid object you placed -- static or rigid physics -- is selected where
+  the cursor is on its collision. The box around it does not count: a click
+  that passes a fence panel's box and lands on the table behind it selects
+  the table.
+- An object without collision -- physics **None**, a door's leaf, an item --
+  is found by its box, which now turns and scales with the object instead
+  of standing square to the world. It is selected when the cursor crosses
+  that box in front of the surface behind it. When that surface is a
+  smaller object you placed, the smaller one is selected: a cup under a
+  canopy, not the canopy.
+- A box the camera is inside is never taken, so standing inside a large
+  decoration no longer sends every click to it. Step outside it to click
+  it, or select it with a box, a lasso or the Layers tab.
+- A solid object whose collision does not cover all of its mesh, such as a
+  tree that is solid at the trunk only, is still selected by its box when
+  the cursor is on nothing else you placed. A click on the ground under its
+  crown stays a click on the ground.
+
+The label beside the cursor names what a click there would select.
+
 Undo and redo select what they changed, when it is still there: Ctrl+Z after
 moving a prop gives you that prop back, even one that is hard to click
 because it stands beside something larger. Undoing a deletion selects what

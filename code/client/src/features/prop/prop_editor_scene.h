@@ -1,6 +1,7 @@
 #pragma once
 
 #include "prop_editor_objects.h"
+#include "prop_editor_pick.h"
 #include "prop_editor_world_objects.h"
 
 #include "common/spawn/prop_spawner.h"
@@ -17,6 +18,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace KCDC::Features::Prop {
@@ -57,6 +59,15 @@ namespace KCDC::Features::Prop {
         /** Refreshed from the entity each tick; empty when it has no mesh. */
         SDK::AABB worldBounds {};
         bool hasBounds = false;
+
+        /**
+         * The box a click weighs, refreshed with `worldBounds`: the mesh's own
+         * box under the entity's world transform, or a smart object's world
+         * box under the identity. `solid` says the preview has a collider.
+         */
+        SDK::AABB pickBounds {};
+        SDK::Matrix34 pickMatrix {};
+        bool solid = false;
     };
 
     /** The mesh an item class lies on the ground as, as the game's tables name it, or empty. Game thread. */
@@ -104,8 +115,13 @@ namespace KCDC::Features::Prop {
         /** Drops dead handles and refreshes bounds. */
         void Refresh();
 
-        /** The nearest object a ray enters, or 0, with its distance. */
-        std::uint64_t PickNearest(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, float &distance, const EditorLayers *layers = nullptr) const;
+        /** Every object with a box that `layers` lets be edited, as a click weighs them. */
+        void CollectPickBoxes(std::vector<PlacedPickBox> &boxes, const EditorLayers *layers = nullptr) const;
+
+        /** The entities standing for the editor's objects as of the last refresh, a smart object's every part included. */
+        const std::unordered_set<SDK::EntityId> &OwnedEntities() const {
+            return _ownedEntities;
+        }
 
         const std::vector<PlacedObject> &Objects() const {
             return _objects;
@@ -140,6 +156,9 @@ namespace KCDC::Features::Prop {
 
         std::vector<PlacedObject> _objects;
         std::uint64_t _nextId = 1;
+
+        /** Rebuilt by Refresh, so the level's bounds passes can leave these to the scene's own test. */
+        std::unordered_set<SDK::EntityId> _ownedEntities;
 
         /** Each smart object's preview, by record id. */
         std::unordered_map<std::uint64_t, std::unique_ptr<SmartObject::SmartObjectAssembly>> _assemblies;

@@ -438,12 +438,14 @@ namespace KCDC::Features::Prop {
     }
 
     void EditorScene::Refresh() {
+        _ownedEntities.clear();
         auto *entitySystem = SDK::IEntitySystem::GetInstance();
         if (entitySystem == nullptr) {
             for (PlacedObject &object : _objects) {
                 object.entityId   = 0;
                 object.renderNode = nullptr;
                 object.hasBounds  = false;
+                object.solid      = false;
             }
             return;
         }
@@ -455,12 +457,22 @@ namespace KCDC::Features::Prop {
                 SDK::IEntity *part  = object.entityId != 0 ? entitySystem->GetEntity(object.entityId) : nullptr;
                 SDK::AABB bounds {};
                 object.renderNode = nullptr;
+                object.solid      = false;
                 object.hasBounds  = assembly != _assemblies.end() && part != nullptr && !part->IsGarbage() && assembly->second->Bounds(bounds) && IsUsableBounds(bounds);
                 if (object.hasBounds) {
                     object.worldBounds = bounds;
+                    object.pickBounds  = bounds;
+                    object.pickMatrix  = SDK::Matrix34FromTransform(SDK::Vec3 {}, SDK::Quat {0.0F, 0.0F, 0.0F, 1.0F}, SDK::Vec3 {1.0F, 1.0F, 1.0F});
                 }
                 else if (part == nullptr || part->IsGarbage()) {
                     object.entityId = 0;
+                }
+                if (assembly != _assemblies.end()) {
+                    for (const SDK::EntityId partId : assembly->second->Parts()) {
+                        _ownedEntities.insert(partId);
+                        SDK::IEntity *member = entitySystem->GetEntity(partId);
+                        object.solid         = object.solid || (member != nullptr && !member->IsGarbage() && member->GetPhysics() != nullptr);
+                    }
                 }
                 continue;
             }
@@ -472,45 +484,45 @@ namespace KCDC::Features::Prop {
                 object.entityId   = 0;
                 object.renderNode = nullptr;
                 object.hasBounds  = false;
+                object.solid      = false;
                 continue;
             }
+            _ownedEntities.insert(object.entityId);
 
             // The octree hands picks back as this node rather than the entity.
             auto *render      = static_cast<SDK::IEntityRenderProxy *>(entity->GetProxy(static_cast<int>(SDK::EEntityProxy::Render)));
             object.renderNode = render != nullptr ? render->GetRenderNode() : nullptr;
+            object.solid      = entity->GetPhysics() != nullptr;
 
             SDK::AABB bounds {};
             entity->GetWorldBounds(bounds);
             object.hasBounds = IsUsableBounds(bounds);
             if (object.hasBounds) {
                 object.worldBounds = bounds;
+
+                // The mesh's own box under the entity's transform; the world box under none when the entity has no usable one.
+                SDK::AABB local {};
+                entity->GetLocalBounds(local);
+                if (IsUsableBounds(local)) {
+                    object.pickBounds = local;
+                    object.pickMatrix = entity->GetWorldTM();
+                }
+                else {
+                    object.pickBounds = bounds;
+                    object.pickMatrix = SDK::Matrix34FromTransform(SDK::Vec3 {}, SDK::Quat {0.0F, 0.0F, 0.0F, 1.0F}, SDK::Vec3 {1.0F, 1.0F, 1.0F});
+                }
             }
         }
     }
 
-    std::uint64_t EditorScene::PickNearest(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, float &distance, const EditorLayers *layers) const {
-        std::uint64_t picked = 0;
-        float nearest        = maxDistance;
-
+    void EditorScene::CollectPickBoxes(std::vector<PlacedPickBox> &boxes, const EditorLayers *layers) const {
+        boxes.clear();
         for (const PlacedObject &object : _objects) {
-            if (layers && !layers->Editable("prop:" + std::to_string(object.id))) {
+            if (!object.hasBounds || (layers != nullptr && !layers->Editable("prop:" + std::to_string(object.id)))) {
                 continue;
             }
-            if (!object.hasBounds) {
-                continue;
-            }
-
-            const float hitDistance = SDK::RayBoxEntryDistance(origin, direction, object.worldBounds);
-            if (hitDistance < 0.0F || hitDistance > nearest) {
-                continue;
-            }
-
-            nearest = hitDistance;
-            picked  = object.id;
+            boxes.push_back(PlacedPickBox {object.id, object.pickBounds, object.pickMatrix, object.solid});
         }
-
-        distance = picked != 0 ? nearest : maxDistance;
-        return picked;
     }
 
 } // namespace KCDC::Features::Prop
