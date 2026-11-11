@@ -9,6 +9,7 @@
 #include "prop_editor_document.h"
 #include "prop_editor_effects.h"
 #include "prop_editor_environment.h"
+#include "prop_editor_figure.h"
 #include "prop_editor_history.h"
 #include "prop_editor_keymap.h"
 #include "prop_editor_library.h"
@@ -237,6 +238,14 @@ namespace KCDC::Features::Prop {
         std::string patrolPreviewStatus;
         std::vector<glm::vec3> patrolPath;
 
+        // The scale figure: a person standing in the scene, outside the project.
+        bool figureActive   = false;
+        bool figureStanding = false;
+        std::string figureRole;
+        std::string figureStatus = "No figure is standing.";
+        SDK::Vec3 figurePosition {};
+        float figureYaw = 0.0F;
+
         // The placement brush.
         int armedModel     = AssetLibrary::kNone; // a mesh or effect row, per `armedIsEffect`
         bool armedIsEffect = false;
@@ -330,6 +339,7 @@ namespace KCDC::Features::Prop {
             Disarm,
             Preview,
             PatrolPreview,
+            Figure, // stand the scale figure `previewRole`; with `enable` off, take it away
             ProbeGround,
             SetEffectTuning,
             PlaceLight,
@@ -409,6 +419,7 @@ namespace KCDC::Features::Prop {
             float value2 = 0.0F;
             bool enable  = false; // on/off, additive selection, or group transform
             bool effect  = false; // Arm and Preview: the row is an effect, not a mesh
+            bool aimed   = false; // Figure: on the surface under ndcX, ndcY and facing the camera, rather than at `position` facing `value`
 
             Shared::Game::VfxTuning tuning;
             Shared::Game::LightTuning lightTuning;
@@ -727,6 +738,7 @@ namespace KCDC::Features::Prop {
         std::map<std::uint64_t, std::string> _collisionResults;
         std::string _collisionError;
         Patrol::PatrolPreview _patrolPreview;
+        EditorFigure _figure;
         MapDocument _unresolvedDocument;
         std::shared_ptr<const MapDocument> _unresolvedPublished;
         EditorEffects _effects;
@@ -946,6 +958,7 @@ namespace KCDC::Features::Prop {
         std::vector<DocumentView> _views;
         std::uint64_t _viewsRevision = 0;
         char _viewName[48]           = {};
+        std::string _figureRole      = "townsman";
 
         // The transform draft, held so a drag is not reset by a stale snapshot.
         std::uint64_t _editId = 0;

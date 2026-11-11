@@ -39,6 +39,7 @@
 #include "features/prop/prop_ghost.h"
 #include "shared/game/smart_object_blueprints.h"
 
+#include "shared/game/npc_roles.h"
 #include "shared/game/prop_models.h"
 #include "shared/game/vfx_catalog.h"
 
@@ -325,6 +326,7 @@ namespace KCDC::Features::Prop {
         _environment.RequestRelease();
         EditorCapture::Get().Shutdown();
         _patrolPreview.Stop();
+        _figure.Remove();
         KCDC_JUNK;
         _open.store(false, std::memory_order_release);
         _looking.store(false, std::memory_order_release);
@@ -377,6 +379,7 @@ namespace KCDC::Features::Prop {
             _completedCommand = _nextCommand.load(std::memory_order_acquire);
         }
         _patrolPreview.Stop();
+        _figure.Remove();
         KCDC_JUNK;
         Disarm();
         SetPreview(AssetLibrary::kNone, false);
@@ -1095,6 +1098,7 @@ namespace KCDC::Features::Prop {
             _mapTravel.Reset();
             _areaCollision.Forget();
             _patrolPreview.Stop(true);
+            _figure.Remove(true);
             // Forget rather than restore: the nodes are freed, and queued
             // browser rows name nodes by pointer.
             {
@@ -1135,6 +1139,8 @@ namespace KCDC::Features::Prop {
         if (!open && _patrolPreview.Active()) {
             _patrolPreview.Stop();
         }
+        // The figure stays through F7, so the scene can be walked with it standing there.
+        _figure.Update();
 
         const auto reconcileControls = [&] {
             const bool controls = open && !_mapTravel.NativeInput();
@@ -2226,12 +2232,39 @@ namespace KCDC::Features::Prop {
         }
         case CommandKind::PatrolPreview:
             if (command.patrolRoute && IsOpen() && Core::gApplication) {
+                // The game keeps one preview body.
+                _figure.Remove();
                 _patrolPreview.Start(*command.patrolRoute, command.previewRole, Core::gApplication->GetCurrentLevelName());
             }
             else {
                 _patrolPreview.Stop();
             }
             break;
+        case CommandKind::Figure: {
+            if (!command.enable) {
+                _figure.Remove();
+                SetStatus(_figure.Status());
+                break;
+            }
+            SDK::Vec3 position = command.position;
+            float yaw          = command.value;
+            if (command.aimed) {
+                SDK::Vec3 normal {};
+                bool hit = false;
+                ResolveAim(command.ndcX, command.ndcY, 0.0F, position, normal, hit);
+                if (!hit) {
+                    SetStatus("Point at the ground or a floor to stand the figure on it");
+                    break;
+                }
+                // Facing the camera, so its proportions read at once.
+                yaw = _camera.GetPose().yawDegrees + 180.0F;
+            }
+            // The game keeps one preview body.
+            _patrolPreview.Stop();
+            _figure.Place(command.previewRole, position, yaw);
+            SetStatus(_figure.Status());
+            break;
+        }
         case CommandKind::ReplaceDocument:
             _areaCollision.Reset();
             EditorLayerRender::Get().Clear();
@@ -3410,6 +3443,12 @@ namespace KCDC::Features::Prop {
         snapshot.patrolProgress      = _patrolPreview.Progress();
         snapshot.patrolPreviewStatus = _patrolPreview.Status();
         snapshot.patrolPath          = _patrolPreview.Path();
+        snapshot.figureActive        = _figure.Active();
+        snapshot.figureStanding      = _figure.Standing();
+        snapshot.figureRole          = _figure.Role();
+        snapshot.figureStatus        = _figure.Status();
+        snapshot.figurePosition      = _figure.Position();
+        snapshot.figureYaw           = _figure.YawDegrees();
         snapshot.completedCommand    = _completedCommand;
         snapshot.unresolvedDocument  = _unresolvedPublished;
         for (const SelectionRef &ref : SelectionRefs()) {
@@ -4096,6 +4135,7 @@ namespace KCDC::Features::Prop {
                 row(_keymap.Label(EditorAction::Delete).c_str(), "delete props, take the level's own out");
                 row(_keymap.Label(EditorAction::DropToGround).c_str(), "drop to the ground");
                 row((_keymap.Label(EditorAction::Undo) + " / " + _keymap.Label(EditorAction::Redo)).c_str(), "undo, redo -- and select what changed");
+                row(_keymap.Label(EditorAction::FigureAtCursor).c_str(), "stand a person under the cursor, for scale (Camera tab)");
                 row("Keys tab", "change any of these keys");
                 heading("Selecting many");
                 row("Left drag", "select what is inside a box or lasso on screen");
@@ -5768,6 +5808,45 @@ namespace KCDC::Features::Prop {
         else {
             ImGui::TextDisabled("No local player in this level.");
         }
+
+        ImGui::SeparatorText("Scale figure");
+        ImGui::TextWrapped("Stand a person in the scene to judge its proportions. The figure is not saved or exported, and stays while you walk the scene with F7.");
+        if (ImGui::BeginCombo("Figure", _figureRole.c_str())) {
+            for (const Shared::Game::NpcRoleEntry &entry : Shared::Game::g_NpcRoles) {
+                if (ImGui::Selectable(entry.name.data(), _figureRole == entry.name)) {
+                    _figureRole = entry.name;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::BeginDisabled(!snapshot.cameraHeld);
+        if (ImGui::Button("Stand it in the middle of the view", ImVec2(-1.0F, 0.0F))) {
+            Command command;
+            command.kind        = CommandKind::Figure;
+            command.enable      = true;
+            command.aimed       = true;
+            command.previewRole = _figureRole;
+            Queue(std::move(command));
+        }
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("Key %s stands it under the cursor.", _keymap.Label(EditorAction::FigureAtCursor).c_str());
+        ImGui::BeginDisabled(!snapshot.figureActive);
+        if (ImGui::Button("Look from its eyes", ImVec2(-1.0F, 0.0F))) {
+            Command command;
+            command.kind     = CommandKind::CameraView;
+            command.position = FigureEyePoint(snapshot.figurePosition, snapshot.figureYaw);
+            command.value    = snapshot.figureYaw;
+            command.value2   = 0.0F;
+            Queue(std::move(command));
+        }
+        if (ImGui::Button("Take the figure away", ImVec2(-1.0F, 0.0F))) {
+            Command command;
+            command.kind   = CommandKind::Figure;
+            command.enable = false;
+            Queue(std::move(command));
+        }
+        ImGui::EndDisabled();
+        ImGui::TextWrapped("%s", snapshot.figureStatus.c_str());
     }
 
     void MapEditor::SyncEditDraft(const EditorSnapshot &snapshot) {
@@ -6177,6 +6256,16 @@ namespace KCDC::Features::Prop {
             }
             if (_keymap.Pressed(EditorAction::ToggleAxes)) {
                 _viewport.localSpace = !_viewport.localSpace;
+            }
+            if (overWorld && _keymap.Pressed(EditorAction::FigureAtCursor)) {
+                Command command;
+                command.kind        = CommandKind::Figure;
+                command.enable      = true;
+                command.aimed       = true;
+                command.ndcX        = ndcX;
+                command.ndcY        = ndcY;
+                command.previewRole = _figureRole;
+                Queue(std::move(command));
             }
             if (_keymap.Pressed(EditorAction::ToggleSnap)) {
                 bool &snapping = _patrols.IsTabVisible() || (_areas.IsTabVisible() && _areas.IsEditingHandle()) ? _viewport.snapTranslate : _operation == 1 ? _viewport.snapRotate : _operation == 2 ? _viewport.snapScale : _viewport.snapTranslate;

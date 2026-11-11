@@ -61,7 +61,7 @@ comes back as it was when the editor closes.
 | middle drag      | pan, scaled so the point you grabbed stays under the cursor                                                                                                                                                                        |
 | Alt + left drag  | orbit the selection, or what the drag began on                                                                                                                                                                                     |
 | F                | frame the selection (a group is framed whole)                                                                                                                                                                                      |
-| Camera tab       | speed, FOV, saved views (stored in the map), go to / bring the player                                                                                                                                                              |
+| Camera tab       | speed, FOV, saved views (stored in the map), go to / bring the player, the scale figure                                                                                                                                            |
 
 The fly keys are read from the game's `photomode_camera` action map, so a
 rebind in the Controls menu applies to the editor and to NoClip too. They go
@@ -85,6 +85,29 @@ not choose an interior floor or guarantee that a spot is walkable.
 
 The project, selections, and armed placement tool remain available when the
 editor returns. Map travel is unavailable in multiplayer.
+
+### Scale figure (Camera tab)
+
+To judge a scene's proportions without leaving the editor, stand a person
+in it. Rest the cursor on the ground or a floor and press **H**: a figure
+stands there, facing the camera. **Stand it in the middle of the view**, in
+the Camera tab's **Scale figure** section, does the same for the point the
+view is centred on, and **Figure** chooses who stands: a guard, a townsman,
+a townswoman and the other roles the patrol preview offers.
+
+**Look from its eyes** moves the editor camera to the figure's eye height,
+about 1.65 m above its feet and a step in front of its face, looking where
+it looks. Stand the figure in a doorway or at a table and look from its
+eyes to see the room as a player standing there will.
+
+The figure stands still, cannot be hurt, and is not part of the project: it
+is not saved, exported or undone, and it cannot be selected or moved --
+press H again to stand it somewhere else. It stays when F7 hands you the
+player, so you can walk around it, and goes when you take it away, change
+level or leave the session. One figure stands at a time, and it shares the
+game's one preview body with the patrol preview: starting either takes the
+other away. Without a level loaded, or where the game refuses the body, the
+section says why.
 
 ### Conditions (Environment tab)
 
@@ -348,6 +371,7 @@ similar radius and Visible only.
 | --------------- | ------------------------------------------------------------------------------------------------------------------ |
 | 1 2 3           | move, rotate, scale                                                                                                |
 | B               | brush selection on or off                                                                                          |
+| H               | stand the scale figure under the cursor                                                                            |
 | L               | a drag selects by box or by lasso                                                                                  |
 | G               | local or world axes                                                                                                |
 | X               | snapping for the tool in hand (each tool keeps its own step)                                                       |

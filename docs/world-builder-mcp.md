@@ -98,6 +98,7 @@ select an interior floor.
 | Native areas                   | Query, inspect, point containment and copy into authored areas                                                                                                                                                                                                        |
 | Authored areas                 | Create, inspect, replace, duplicate, delete, groups and point containment                                                                                                                                                                                             |
 | Patrols                        | Route and point authoring, NPC role discovery, preview start/progress/stop                                                                                                                                                                                            |
+| Scale figure                   | Stand a temporary person of an NPC role at a position or under a screen point, read it and its eye point, take it away (`wb_figure_place`, `wb_figure_get`, `wb_figure_remove`)                                                                                      |
 | Camera                         | Read/set, frame, saved views and restore                                                                                                                                                                                                                              |
 | Environment                    | Preview conditions (hour, clock speed, sky preset, rain), level preset and profile discovery, and the game's own clock                                                                                                                                                |
 | Spatial queries                | Raycast, what a click at a screen point would select (`wb_pick_at`), ground probe and point projection                                                                                                                                                                |
@@ -375,6 +376,35 @@ that block both directions, with `collisionFloor` and `collisionCeiling`
 2, `0.2` when omitted). Create/update, query/get, project saves and undo
 use the same settings. See [Area collision](area-collision.md) for shape
 limits.
+
+## Scale figure
+
+`wb_figure_place` stands a temporary person in the scene to judge its
+proportions by. `role` is a name from `wb_npc_roles_query`. Give either
+`position`, the figure's feet as `[x, y, z]` in world metres, with an optional `yaw` in
+degrees as `wb_camera_get` reads it, counter-clockwise from +Y seen from
+above, or `aim`, a screen point in normalized device coordinates through
+the editor camera: the figure then stands on the surface there and faces
+the camera. Giving both, neither, or `yaw` with
+`aim` is refused, as is an unknown role. The call is queued; read the
+outcome with `wb_figure_get`.
+
+`wb_figure_get` returns `active` (a figure was asked for), `standing` (its
+body is up), `role`, `position`, `yaw`, `eyePoint` and `status`. `eyePoint`
+is where the editor's **Look from its eyes** stands: 1.65 m above the feet
+and 0.3 m in front of the face. Pass it and `yaw` to `wb_camera_set` to
+look at the scene as that person does. `position`, `yaw` and `eyePoint` are
+`null` while no figure is active; when set, `position` and `eyePoint` are
+`[x, y, z]`, as `wb_camera_set` spells a position. `wb_figure_remove` takes
+the figure away.
+
+The figure belongs to the editing session, not to the document: it is not
+saved, exported or undone, and has no object ID. One figure stands at a
+time. It shares the game's one preview body with the
+patrol preview, so `wb_figure_place` stops a patrol preview and
+`wb_patrol_preview_start` takes the figure away. The key that stands it
+under the cursor is `figureAtCursor` in `wb_keymap_get` and
+`wb_keymap_update`.
 
 ## Selecting many objects
 
