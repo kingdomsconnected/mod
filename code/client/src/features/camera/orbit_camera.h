@@ -70,6 +70,13 @@ namespace KCDC::Features::Camera {
             return _steering;
         }
 
+        /**
+         * In the saddle the orbit only moves the camera: the keys keep steering
+         * the horse as the game has them, the rider's view and head are left
+         * alone, and the camera follows the horse's turns.
+         */
+        void SetRiding(bool riding);
+
         void SetOptions(const OrbitOptions &options);
 
         /** One frame: the mouse's travel, the body's turn, the head. */
@@ -110,6 +117,11 @@ namespace KCDC::Features::Camera {
 
         // Whether the move vector currently holds this class's rewrite.
         bool _moveOverridden = false;
+
+        // Saddle mode: the body's yaw seen last frame, so the camera turns with the horse.
+        bool _riding       = false;
+        bool _hasBodyYaw   = false;
+        float _lastBodyYaw = 0.0F;
 
         // Accumulated inside the engine's input dispatch, settled in Update.
         float _pendingX = 0.0F;

@@ -144,7 +144,8 @@ namespace KCDC::Features::Camera {
         // The view's pitch aims the upper body, and nothing will move it
         // while the look actions are held back: left where the player was
         // looking, the body would stand bent toward the ground or the sky.
-        if (SDK::wh::entitymodule::C_Human *actor = KCDC::Common::LocalHumanActor(); actor != nullptr && actor->TakesYawDelta()) {
+        _hasBodyYaw       = false;
+        if (SDK::wh::entitymodule::C_Human *actor = KCDC::Common::LocalHumanActor(); !_riding && actor != nullptr && actor->TakesYawDelta()) {
             actor->SetViewRotation(ViewRotation(BodyYaw(actor, _yaw), 0.0F));
         }
         Framework::Logging::GetLogger(kLogger)->debug("Orbit look on");
@@ -172,13 +173,36 @@ namespace KCDC::Features::Camera {
 
         if (actor != nullptr) {
             HoldHead(actor, false);
-            if (alignView && actor->TakesYawDelta()) {
+            if (alignView && !_riding && actor->TakesYawDelta()) {
                 actor->SetViewRotation(ViewRotation(_yaw, _pitch));
             }
         }
         _headHeld     = false;
         _headEntityId = 0;
         Framework::Logging::GetLogger(kLogger)->debug("Orbit look off");
+    }
+
+    void OrbitCamera::SetRiding(bool riding) {
+        if (riding == _riding) {
+            return;
+        }
+        _riding     = riding;
+        _hasBodyYaw = false;
+        SDK::wh::entitymodule::C_Human *actor = KCDC::Common::LocalHumanActor();
+        if (!_steering || actor == nullptr) {
+            return;
+        }
+        if (riding) {
+            // Mounting: the keys go back to the rider and the head to the game.
+            if (_moveOverridden) {
+                if (SDK::wh::entitymodule::C_PlayerInput *input = LocalInput()) {
+                    const SDK::Vec2 &raw = input->GetRawMovementInput();
+                    input->OverrideMoveVector(SDK::Vec3 {raw.x, raw.y, 0.0F});
+                }
+                _moveOverridden = false;
+            }
+            HoldHead(actor, false);
+        }
     }
 
     void OrbitCamera::SetOptions(const OrbitOptions &options) {
@@ -229,6 +253,20 @@ namespace KCDC::Features::Camera {
 
         SDK::wh::entitymodule::C_Human *actor = KCDC::Common::LocalHumanActor();
         if (actor == nullptr) {
+            return;
+        }
+
+        // In the saddle the mouse only swings the camera around the rider; the
+        // horse's own turns carry the camera with them, so a look aside stays
+        // aside while the horse rounds a bend.
+        if (_riding) {
+            const float body = BodyYaw(actor, _yaw);
+            if (_hasBodyYaw) {
+                _yaw = WrapAngle(_yaw + WrapAngle(body - _lastBodyYaw));
+            }
+            _lastBodyYaw = body;
+            _hasBodyYaw  = true;
+            _headLook    = ForwardOf(body, 0.0F);
             return;
         }
 

@@ -359,7 +359,12 @@ namespace KCDC::Features::Camera {
         // or fists up the fight turns the body from the view, and aiming
         // needs the two to agree; under a camera limit or a rotation lock --
         // a seat, a lean, a scripted action -- the facing is not the keys'.
-        return app->GetHorseService().SeatOf(actor->GetEntityId()) == 0 && !app->GetPlayerService().Combat().fistsUp && actor->TakesYawDelta();
+        // In the saddle the orbit only swings the camera (OrbitCamera::SetRiding):
+        // the rider's facing stays the game's, so the yaw lock does not count.
+        if (app->GetPlayerService().Combat().fistsUp) {
+            return false;
+        }
+        return app->GetHorseService().SeatOf(actor->GetEntityId()) != 0 || actor->TakesYawDelta();
     }
 
     void CameraControlService::SettleOrbit() {
@@ -367,6 +372,11 @@ namespace KCDC::Features::Camera {
             _orbit.End(/*alignView=*/true);
             _orbitTickMicroseconds = 0;
             return;
+        }
+
+        {
+            SDK::wh::entitymodule::C_Human *actor = KCDC::Common::LocalHumanActor();
+            _orbit.SetRiding(actor != nullptr && Core::gApplication->GetHorseService().SeatOf(actor->GetEntityId()) != 0);
         }
 
         const std::int64_t now = NowMicroseconds();
