@@ -17,6 +17,7 @@
 #include "prop_editor_mcp.h"
 #include "prop_editor_objects.h"
 #include "prop_editor_patrols.h"
+#include "prop_editor_poses.h"
 #include "prop_editor_scene.h"
 #include "prop_editor_selection.h"
 
@@ -237,6 +238,9 @@ namespace KCDC::Features::Prop {
         nlohmann::json patrolProgress;
         std::string patrolPreviewStatus;
         std::vector<glm::vec3> patrolPath;
+
+        /** Where the game poses bodies near the camera, while the overlay is on: the editor's smart objects and the level's own. */
+        std::vector<PoseAnchor> poseAnchors;
 
         // The scale figure: a person standing in the scene, outside the project.
         bool figureActive   = false;
@@ -469,6 +473,13 @@ namespace KCDC::Features::Prop {
         };
         ScenePick PickScene(const SDK::Vec3 &heading, PickEffort effort);
 
+        /**
+         * Every pose anchor within `radius` of `centre`: the parts of the
+         * editor's own smart objects that carry a pose helper, read off their
+         * blueprints, and the level's entities of the same classes. Game thread.
+         */
+        void CollectPoseAnchors(const SDK::Vec3 &centre, float radius, std::vector<PoseAnchor> &anchors) const;
+
         /** Re-reads what the cursor rests on. Throttled; game thread. */
         void RefreshHover();
 
@@ -592,6 +603,12 @@ namespace KCDC::Features::Prop {
         void RenderEffectList(const EditorSnapshot &snapshot);
         void RenderEffectTuning(const EditorSnapshot &snapshot);
         void RenderEffectMarkers(const EditorSnapshot &snapshot);
+
+        /** Draws each pose anchor as a dot with a tick the way a body there faces, and names the one under the cursor. */
+        void RenderPoseAnchors(const EditorSnapshot &snapshot);
+
+        /** The pose anchor whose marker is under the cursor, or null. Render thread. */
+        const PoseAnchor *PoseAnchorUnderCursor(const EditorSnapshot &snapshot) const;
         void RenderPlacementOptions();
         void RenderSceneTab(const EditorSnapshot &snapshot);
         void RenderLevelEdits(const EditorSnapshot &snapshot);
@@ -739,6 +756,12 @@ namespace KCDC::Features::Prop {
         std::string _collisionError;
         Patrol::PatrolPreview _patrolPreview;
         EditorFigure _figure;
+
+        /** The overlay's anchors, rebuilt about once a second while it is on. */
+        std::vector<PoseAnchor> _poseAnchors;
+        std::chrono::steady_clock::time_point _poseAnchorsRead {};
+        std::atomic<bool> _poseAnchorsShown {true};
+        std::atomic<float> _poseAnchorReach {40.0F};
         MapDocument _unresolvedDocument;
         std::shared_ptr<const MapDocument> _unresolvedPublished;
         EditorEffects _effects;

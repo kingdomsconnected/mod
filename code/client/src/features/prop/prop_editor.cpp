@@ -30,6 +30,9 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "sdk/cryengine/entitysystem/i_entity.h"
+#include "sdk/cryengine/entitysystem/i_entity_class.h"
+#include "sdk/cryengine/entitysystem/i_entity_iterator.h"
+#include "sdk/cryengine/entitysystem/i_entity_system.h"
 #include "sdk/cryengine/physics/c_physical_world.h"
 
 #include "features/camera/fly_keys.h"
@@ -1219,6 +1222,19 @@ namespace KCDC::Features::Prop {
             UpdateBrush();
             UpdatePreview(delta);
             _patrolPreview.Update();
+        }
+
+        // Walking every entity is not free: about once a second, and only while the overlay is on.
+        if (interacting && _poseAnchorsShown.load(std::memory_order_relaxed)) {
+            if (_poseAnchorsRead.time_since_epoch().count() == 0 || now - _poseAnchorsRead >= std::chrono::seconds(1)) {
+                _poseAnchorsRead = now;
+                _poseAnchors.clear();
+                CollectPoseAnchors(_camera.GetPose().position, _poseAnchorReach.load(std::memory_order_relaxed), _poseAnchors);
+            }
+        }
+        else {
+            _poseAnchors.clear();
+            _poseAnchorsRead = {};
         }
 
         // The brush has its own readout.
@@ -3443,6 +3459,7 @@ namespace KCDC::Features::Prop {
         snapshot.patrolProgress      = _patrolPreview.Progress();
         snapshot.patrolPreviewStatus = _patrolPreview.Status();
         snapshot.patrolPath          = _patrolPreview.Path();
+        snapshot.poseAnchors         = _poseAnchors;
         snapshot.figureActive        = _figure.Active();
         snapshot.figureStanding      = _figure.Standing();
         snapshot.figureRole          = _figure.Role();
@@ -3824,6 +3841,7 @@ namespace KCDC::Features::Prop {
             _patrols.RenderOverlay(snapshot, lines);
         }
         RenderEffectMarkers(snapshot);
+        RenderPoseAnchors(snapshot);
         RenderLightMarkers(snapshot);
         RenderSelectionOutline(snapshot, lines);
         Gizmos::GizmosService::Get().SetEditorOverlay(std::move(lines));
@@ -4565,6 +4583,135 @@ namespace KCDC::Features::Prop {
             const float dy = mouse.y - at.y;
             if (selected || dx * dx + dy * dy < 400.0F) {
                 draw->AddText(ImVec2(at.x + kSize + 4.0F, at.y - 7.0F), colour, row.label.c_str());
+            }
+        }
+    }
+
+    void MapEditor::CollectPoseAnchors(const SDK::Vec3 &centre, float radius, std::vector<PoseAnchor> &anchors) const {
+        const auto within = [&centre, radius](const SDK::Vec3 &point) {
+            const SDK::Vec3 offset {point.x - centre.x, point.y - centre.y, point.z - centre.z};
+            return offset.x * offset.x + offset.y * offset.y + offset.z * offset.z <= radius * radius;
+        };
+
+        // The editor's own, off their blueprints: they stand where the record says.
+        std::vector<PoseAnchor> own;
+        for (const PlacedObject &object : _scene.Objects()) {
+            if (object.kind != PlacedKind::SmartObject || !_layers.Visible(LayerKey({SelectionKind::Placed, object.id}))) {
+                continue;
+            }
+            const Shared::Game::SmartObjectBlueprint *blueprint = Shared::Game::FindSmartObjectBlueprint(object.model);
+            if (blueprint == nullptr) {
+                continue;
+            }
+            own.clear();
+            AppendPoseAnchors(*blueprint, KCDC::Common::ToGlm(object.position), KCDC::Common::ToGlm(object.rotation), object.id, own);
+            for (PoseAnchor &anchor : own) {
+                if (within(anchor.position)) {
+                    anchors.push_back(std::move(anchor));
+                }
+            }
+        }
+
+        // The level's own: entities of the classes the shipped blueprints pose bodies with.
+        auto *entitySystem = SDK::IEntitySystem::GetInstance();
+        if (entitySystem == nullptr) {
+            return;
+        }
+        SDK::IEntityItPtr iterator(entitySystem->GetEntityIterator());
+        if (!iterator) {
+            return;
+        }
+        const std::vector<std::string_view> classes = PoseAnchorClasses();
+        iterator->MoveFirst();
+        while (!iterator->IsEnd()) {
+            SDK::IEntity *entity = iterator->Next();
+            if (entity == nullptr || entity->IsGarbage() || entity->IsHidden()) {
+                continue;
+            }
+            const SDK::Vec3 position = entity->GetWorldPos();
+            if (!within(position)) {
+                continue;
+            }
+            SDK::IEntityClass *entityClass = entity->GetClass();
+            const char *className          = entityClass != nullptr ? entityClass->GetName() : nullptr;
+            if (className == nullptr || std::find(classes.begin(), classes.end(), std::string_view {className}) == classes.end()) {
+                continue;
+            }
+            // One of the editor's own previews was listed off its blueprint.
+            if (_scene.FindByEntityId(entity->GetId()) != 0) {
+                continue;
+            }
+            SDK::Vec3 at {};
+            SDK::Quat rotation {0.0F, 0.0F, 0.0F, 1.0F};
+            SDK::Vec3 scale {};
+            SDK::Matrix34ToTransform(entity->GetWorldTM(), at, rotation, scale);
+            PoseAnchor anchor;
+            anchor.position   = position;
+            anchor.yawDegrees = PoseYawDegrees(KCDC::Common::ToGlm(rotation));
+            const char *name  = entity->GetName();
+            anchor.label      = name != nullptr ? name : "";
+            anchor.partClass  = className;
+            anchors.push_back(std::move(anchor));
+        }
+    }
+
+    const PoseAnchor *MapEditor::PoseAnchorUnderCursor(const EditorSnapshot &snapshot) const {
+        constexpr float kGrabPixels   = 14.0F;
+        const ImGuiViewport *viewport = ImGui::GetMainViewport();
+        const ImVec2 mouse            = ImGui::GetIO().MousePos;
+        const PoseAnchor *nearest     = nullptr;
+        float nearestSquared          = kGrabPixels * kGrabPixels;
+        for (const PoseAnchor &anchor : snapshot.poseAnchors) {
+            float ndcX = 0.0F;
+            float ndcY = 0.0F;
+            if (!KCDC::Features::Camera::ProjectToNdc(snapshot.camera, anchor.position, ndcX, ndcY)) {
+                continue;
+            }
+            const ImVec2 at     = NdcToScreen(*viewport, ndcX, ndcY);
+            const float squared = (mouse.x - at.x) * (mouse.x - at.x) + (mouse.y - at.y) * (mouse.y - at.y);
+            if (squared < nearestSquared) {
+                nearestSquared = squared;
+                nearest        = &anchor;
+            }
+        }
+        return nearest;
+    }
+
+    void MapEditor::RenderPoseAnchors(const EditorSnapshot &snapshot) {
+        if (!snapshot.cameraHeld || snapshot.poseAnchors.empty()) {
+            return;
+        }
+
+        const ImGuiViewport *viewport = ImGui::GetMainViewport();
+        ImDrawList *draw              = ImGui::GetBackgroundDrawList();
+        const PoseAnchor *hovered     = ImGui::GetIO().WantCaptureMouse ? nullptr : PoseAnchorUnderCursor(snapshot);
+
+        for (const PoseAnchor &anchor : snapshot.poseAnchors) {
+            float ndcX = 0.0F;
+            float ndcY = 0.0F;
+            if (!KCDC::Features::Camera::ProjectToNdc(snapshot.camera, anchor.position, ndcX, ndcY)) {
+                continue;
+            }
+            const ImVec2 at     = NdcToScreen(*viewport, ndcX, ndcY);
+            const bool own      = anchor.placedId != 0;
+            const bool lit      = &anchor == hovered;
+            const ImU32 colour  = lit ? IM_COL32(255, 255, 255, 255) : own ? IM_COL32(90, 220, 200, 230) : IM_COL32(150, 190, 255, 200);
+            constexpr float kDot = 5.0F;
+            draw->AddCircleFilled(at, kDot, (colour & 0x00FFFFFFU) | 0x70000000U);
+            draw->AddCircle(at, kDot, colour, 0, lit ? 2.0F : 1.3F);
+
+            // A tick the way a body posed there faces, half a metre long in the world.
+            const float yaw = anchor.yawDegrees * 3.14159265358979F / 180.0F;
+            const SDK::Vec3 ahead {anchor.position.x - std::sin(yaw) * 0.5F, anchor.position.y + std::cos(yaw) * 0.5F, anchor.position.z};
+            float aheadX = 0.0F;
+            float aheadY = 0.0F;
+            if (KCDC::Features::Camera::ProjectToNdc(snapshot.camera, ahead, aheadX, aheadY)) {
+                draw->AddLine(at, NdcToScreen(*viewport, aheadX, aheadY), colour, lit ? 2.0F : 1.3F);
+            }
+
+            if (lit) {
+                const std::string text = anchor.label + "\n" + (own ? anchor.partName : anchor.partClass) + "\n" + _keymap.Label(EditorAction::FigureAtCursor) + " stands the figure here";
+                draw->AddText(ImVec2(at.x + kDot + 5.0F, at.y - 8.0F), colour, text.c_str());
             }
         }
     }
@@ -5847,6 +5994,21 @@ namespace KCDC::Features::Prop {
         }
         ImGui::EndDisabled();
         ImGui::TextWrapped("%s", snapshot.figureStatus.c_str());
+
+        ImGui::SeparatorText("Pose anchors");
+        bool anchorsShown = _poseAnchorsShown.load(std::memory_order_relaxed);
+        if (ImGui::Checkbox("Show where the game poses a body", &anchorsShown)) {
+            _poseAnchorsShown.store(anchorsShown, std::memory_order_relaxed);
+        }
+        HelpMarker("A dot with a tick for each place a body sits, lies or works at, facing the way the tick points:\ngreen for the seats, beds and stations you placed, blue for the level's own.\nRest the cursor on one to read what it is.");
+        float anchorReach = _poseAnchorReach.load(std::memory_order_relaxed);
+        ImGui::BeginDisabled(!anchorsShown);
+        ImGui::SetNextItemWidth(160.0F);
+        if (ImGui::SliderFloat("Anchor reach", &anchorReach, 5.0F, 150.0F, "%.0f m", ImGuiSliderFlags_AlwaysClamp)) {
+            _poseAnchorReach.store(anchorReach, std::memory_order_relaxed);
+        }
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("%zu in reach", snapshot.poseAnchors.size());
     }
 
     void MapEditor::SyncEditDraft(const EditorSnapshot &snapshot) {
@@ -6261,10 +6423,17 @@ namespace KCDC::Features::Prop {
                 Command command;
                 command.kind        = CommandKind::Figure;
                 command.enable      = true;
-                command.aimed       = true;
-                command.ndcX        = ndcX;
-                command.ndcY        = ndcY;
                 command.previewRole = _figureRole;
+                if (const PoseAnchor *anchor = PoseAnchorUnderCursor(snapshot)) {
+                    // On an anchor it stands where the body is posed, facing as it faces.
+                    command.position = anchor->position;
+                    command.value    = anchor->yawDegrees;
+                }
+                else {
+                    command.aimed = true;
+                    command.ndcX  = ndcX;
+                    command.ndcY  = ndcY;
+                }
                 Queue(std::move(command));
             }
             if (_keymap.Pressed(EditorAction::ToggleSnap)) {

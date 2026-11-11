@@ -158,6 +158,10 @@ namespace KCDC::Features::Prop {
             "What a viewport click at a screen point in normalized device coordinates would select, without selecting it. A solid object is found where the ray strikes its collision; an object without collision by its oriented box in front of that surface. `kind` is prop, "
             "effect, light, level, terrain or none; `by` is collision or bounds; `id` is set for a prop, effect, light or an adopted level object.",
             true, {{"aim", ndcPoint}}, {"aim"});
+        add("wb_pose_anchors_query",
+            "List where the game poses a body within `radius` metres (40 by default) of `center` (the editor camera by default): each part of a placed smart object that carries a pose helper, and the level's own entities of those classes. Each has `position`, `yaw` in "
+            "degrees as wb_camera_get reads it, `label` (the helper class, or a level entity's name), `class`, `part`, and `objectId`, the placed smart object's ID or null for the level's own. Pass a position and yaw to wb_figure_place to stand the scale figure there.",
+            true, {{"center", Vector(3)}, {"radius", Number(1, 150)}});
         add("wb_ground_probe", "Probe terrain and native collision below explicit positions.", true, {{"points", {{"type", "array"}, {"minItems", 1}, {"maxItems", 256}, {"items", Vector(3)}}}}, {"points"});
         add("wb_project_points", "Project world points into normalized screen coordinates through the active native camera.", true, {{"points", {{"type", "array"}, {"minItems", 1}, {"maxItems", 256}, {"items", Vector(3)}}}}, {"points"});
         for (const char *name : {"wb_operation_get", "wb_operation_wait"}) {
@@ -1226,6 +1230,16 @@ namespace KCDC::Features::Prop {
                     }
                 }
             }
+            else if (name == "wb_pose_anchors_query") {
+                std::vector<PoseAnchor> anchors;
+                editor.CollectPoseAnchors(args.contains("center") ? ReadVec(args.at("center")) : editor._camera.GetPose().position, args.value("radius", 40.0F), anchors);
+                result["anchors"] = nlohmann::json::array();
+                for (const PoseAnchor &anchor : anchors) {
+                    result["anchors"].push_back({{"position", Vec(anchor.position)}, {"yaw", anchor.yawDegrees}, {"label", anchor.label}, {"class", anchor.partClass}, {"part", anchor.partName},
+                        {"objectId", anchor.placedId != 0 ? nlohmann::json(id(SelectionKind::Placed, anchor.placedId)) : nlohmann::json(nullptr)}});
+                }
+                result["count"] = anchors.size();
+            }
             else if (name == "wb_ground_probe" || name == "wb_project_points") {
                 result["points"] = nlohmann::json::array();
                 for (const auto &value : args.at("points")) {
@@ -1249,7 +1263,7 @@ namespace KCDC::Features::Prop {
                     const auto toolName                           = entry.at("tool").get<std::string>();
                     static constexpr std::string_view supported[] = {"wb_objects_query", "wb_object_get", "wb_props_create", "wb_effects_create", "wb_lights_create", "wb_light_update", "wb_objects_transform", "wb_effect_update", "wb_prop_physics_set", "wb_prop_collision_rebuild",
                         "wb_object_settings_update", "wb_objects_duplicate", "wb_objects_convert", "wb_objects_delete", "wb_objects_drop_to_ground", "wb_groups_update", "wb_level_objects_query", "wb_level_object_get", "wb_level_object_update", "wb_level_edits_restore",
-                        "wb_camera_set", "wb_camera_frame", "wb_raycast", "wb_pick_at", "wb_ground_probe", "wb_project_points"};
+                        "wb_camera_set", "wb_camera_frame", "wb_raycast", "wb_pose_anchors_query", "wb_pick_at", "wb_ground_probe", "wb_project_points"};
                     if (std::find(std::begin(supported), std::end(supported), toolName) == std::end(supported)) {
                         throw std::runtime_error("Tool is not supported inside a batch: " + toolName);
                     }

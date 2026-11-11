@@ -109,6 +109,37 @@ game's one preview body with the patrol preview: starting either takes the
 other away. Without a level loaded, or where the game refuses the body, the
 section says why.
 
+### Pose anchors
+
+A seat, a bed or a crafting station poses a body at fixed places: where it
+sits on a bench, lies on a bed, stands at an anvil. The editor draws each
+of them as a dot with a tick pointing the way a body there faces -- green
+for the interactive objects you placed, blue for the level's own -- so you
+can see whether an object has a pose bound to it, where, and how many: a
+two-seat bench shows two.
+
+Rest the cursor on a dot to read it: the game's name for the pose
+(`Sit_1Place_Bench_Low`, `Bed_1Place_High`) and the part that carries it,
+or a level entity's own name and class. Press **H** there and the scale
+figure stands on the anchor, facing as the body will, instead of on the
+ground: that shows whether a seat is clear of the table in front of it or
+a bed's head is against the wall.
+
+**Show where the game poses a body**, in the Camera tab's **Pose anchors**
+section, turns the dots on or off, and **Anchor reach** sets how far from
+the camera they are listed, 40 m by default.
+
+An anchor marks where the pose is bound and its facing. The exact spot of
+each helper point comes from the game's own tables, so the figure stands at
+the anchor; it does not sit. To see the pose itself, press F7 and use the
+object as a player: an interactive object you placed stands assembled, so a
+bench can be sat on and a bed lain on without a server.
+
+A pose belongs to the interactive object that brings it. A mesh from the
+asset library has none, and the editor cannot bind one to it: to make a
+bench players can sit on, place one from **`interactive` -> `seats`**
+rather than a bench mesh.
+
 ### Conditions (Environment tab)
 
 Build under the light the scene is meant for. The **Environment** tab sets

@@ -98,6 +98,7 @@ select an interior floor.
 | Native areas                   | Query, inspect, point containment and copy into authored areas                                                                                                                                                                                                        |
 | Authored areas                 | Create, inspect, replace, duplicate, delete, groups and point containment                                                                                                                                                                                             |
 | Patrols                        | Route and point authoring, NPC role discovery, preview start/progress/stop                                                                                                                                                                                            |
+| Pose anchors                   | List where the game poses a body near a point: placed smart objects' seats, beds and stations, and the level's own (`wb_pose_anchors_query`)                                                                                                                         |
 | Scale figure                   | Stand a temporary person of an NPC role at a position or under a screen point, read it and its eye point, take it away (`wb_figure_place`, `wb_figure_get`, `wb_figure_remove`)                                                                                      |
 | Camera                         | Read/set, frame, saved views and restore                                                                                                                                                                                                                              |
 | Environment                    | Preview conditions (hour, clock speed, sky preset, rain), level preset and profile discovery, and the game's own clock                                                                                                                                                |
@@ -405,6 +406,26 @@ patrol preview, so `wb_figure_place` stops a patrol preview and
 `wb_patrol_preview_start` takes the figure away. The key that stands it
 under the cursor is `figureAtCursor` in `wb_keymap_get` and
 `wb_keymap_update`.
+
+## Pose anchors
+
+`wb_pose_anchors_query` lists where the game poses a body: every part of a
+placed smart object that carries a pose helper class, read off its
+blueprint, and the level's own entities of the classes the shipped
+blueprints pose bodies with. `center` defaults to the editor camera and
+`radius` to 40 metres (1 to 150). Each entry of `anchors` has `position`,
+`yaw` in degrees as `wb_camera_get` reads it, `label` (the helper class, such as
+`Sit_1Place_Bench_Low`, or a level entity's name), `class`, `part` (the
+blueprint's name for the part; empty for the level's own) and `objectId`,
+the placed smart object's opaque ID or `null` for the level's own. `count`
+is their number. The query reads the scene as it stands and does not
+depend on the editor's overlay being shown.
+
+An anchor is the part's origin and facing. The helper points themselves
+are the game's, so an anchor says a pose is bound there and which way it
+faces, not each seat's exact spot. Pass an anchor's `position` and `yaw` to
+`wb_figure_place` to stand the scale figure on it; the figure stands and
+does not play the pose.
 
 ## Selecting many objects
 

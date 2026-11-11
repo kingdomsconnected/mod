@@ -72,6 +72,7 @@
 #include "world_builder_authoring_ut.h"
 #include "world_builder_editor_preferences_ut.h"
 #include "world_builder_figure_ut.h"
+#include "world_builder_poses_ut.h"
 #include "world_builder_keymap_ut.h"
 #include "world_builder_lights_ut.h"
 #include "world_builder_selection_ut.h"
@@ -502,6 +503,7 @@ int main(int argc, char **argv) {
     UNIT_MODULE(world_builder_keymap);
     UNIT_MODULE(world_builder_editor_preferences);
     UNIT_MODULE(world_builder_figure);
+    UNIT_MODULE(world_builder_poses);
     UNIT_MODULE(world_builder_mcp_files);
 #endif
     Framework::Logging::GetInstance()->PauseLogging(true);
