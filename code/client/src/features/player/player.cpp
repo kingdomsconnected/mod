@@ -584,7 +584,17 @@ namespace KCDC::Features::Player {
             // The raw axes every move handler writes: on foot they are the move
             // vector, in the saddle the stick before the riding curve, which
             // the receiver's own stick handler applies again.
-            const SDK::Vec2 &axes = localInput->GetRawMovementInput();
+            SDK::Vec2 axes = localInput->GetRawMovementInput();
+            // Orbiting on foot, the keys name a direction around the camera:
+            // the body turns to it and walks forward (Camera::OrbitCamera
+            // rewrites the move vector). Sending the keys would have every
+            // copy strafe or back-pedal while it travels forward, so the
+            // copies get the move vector the body actually walks.
+            const bool saddled = localPlayer->GetRiderPlayerControl()->GetRiderInput() != nullptr && localPlayer->GetRiderPlayerControl()->GetRiderInput()->GetHorse() != nullptr;
+            if (!saddled && KCDC::Core::gApplication->GetCameraControl().IsOrbiting()) {
+                const SDK::Vec3 &walked = localInput->GetMovementInput();
+                axes                    = SDK::Vec2 {walked.x, walked.y};
+            }
             if (std::isfinite(axes.x) && std::isfinite(axes.y)) {
                 input.moveX = static_cast<std::int8_t>(std::lround(std::clamp(axes.x, -1.0F, 1.0F) * Shared::Entities::PlayerInput::kMoveInputScale));
                 input.moveY = static_cast<std::int8_t>(std::lround(std::clamp(axes.y, -1.0F, 1.0F) * Shared::Entities::PlayerInput::kMoveInputScale));
