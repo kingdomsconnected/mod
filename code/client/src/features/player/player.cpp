@@ -2455,7 +2455,9 @@ namespace KCDC::Features::Player {
         // it is replayed unaltered: the ordinary player PreUpdate owns
         // movement requests, sprint state, velocity, tags and the blend from
         // there. Drift is not steered out through it -- the position
-        // correction rides this body's movement pass instead.
+        // correction rides this body's movement pass instead. The one
+        // addition is in the saddle, where the X axis also carries the turn
+        // the horse copy still owes its owner's facing.
         glm::vec2 axes    = glm::vec2(pose.input.AxisX(), pose.input.AxisY());
         const bool moving = pose.input.IsMoving();
 
@@ -2480,6 +2482,13 @@ namespace KCDC::Features::Player {
         // lift the walk floor the owner's keyboard kept.
         if (riding) {
             const SDK::wh::entitymodule::C_EntityActions *actions = SDK::wh::C_GlobalEnvironment::GetInstance()->GetEntityActions();
+            // What the horse copy's facing is short of its owner's is ridden
+            // out here (`Horse::PresentRemoteState`): this stick is the only
+            // thing that turns a ridden horse.
+            SDK::IActorSystem *actors                   = SDK::IActorSystem::GetInstance();
+            const SDK::EntityId horseEntityId           = KCDC::Core::gApplication->GetHorseService().SeatOf(_entityId);
+            const SDK::wh::entitymodule::C_Actor *mount = actors != nullptr && horseEntityId != 0 ? static_cast<const SDK::wh::entitymodule::C_Actor *>(actors->GetActor(horseEntityId)) : nullptr;
+            axes.x                                      = std::clamp(axes.x + KCDC::Features::Player::NativePlayerModule::MountSteer(mount), -1.0F, 1.0F);
             input->OnXiMoveX(actions->GetXiMoveX(), axes.x);
             input->OnXiMoveY(actions->GetXiMoveY(), axes.y);
             ReplayRiderActions(player, pose);
