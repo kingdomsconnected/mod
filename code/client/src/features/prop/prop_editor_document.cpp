@@ -593,6 +593,10 @@ namespace KCDC::Features::Prop {
                         error = "Layer membership must not change the world object.";
                         return false;
                     }
+                    if (value.object.kind == Shared::Game::LevelEditKind::Grass) {
+                        error = "A grass clearing is not a world object and has no layer.";
+                        return false;
+                    }
                     bool duplicate = false;
                     if (value.object.kind == Shared::Game::LevelEditKind::Entity) {
                         duplicate = !entityIdentities.insert(value.object.guid).second;

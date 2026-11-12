@@ -96,6 +96,7 @@ select an interior floor.
 | Keys                           | Read and rebind the editor's keys, including the Default and W E R presets (`wb_keymap_get`, `wb_keymap_update`)                                                                                                                                                      |
 | Native level objects           | Nearby browse, inspect, adopt, transform, hide, swap for an asset-library mesh (`wb_level_object_update` with `model`), restore, and copy or convert into props (`wb_objects_duplicate`, `wb_objects_convert`)                                                        |
 | Plants under placed objects    | Take the level's low plants out from under placed objects (`wb_plants_flatten`), or as each is placed (`flattenPlants`, `plantMargin` and `plantMaxHeight` in `wb_placement_update`)                                                                                  |
+| Terrain grass                  | Clear the grass baked into the terrain under placed objects or in an explicit box, list the clearings and give the grass back (`wb_grass_clear`, `wb_grass_clearings_list`, `wb_grass_restore`)                                                                       |
 | Native areas                   | Query, inspect, point containment and copy into authored areas                                                                                                                                                                                                        |
 | Authored areas                 | Create, inspect, replace, duplicate, delete, groups and point containment                                                                                                                                                                                             |
 | Patrols                        | Route and point authoring, NPC role discovery, preview start/progress/stop                                                                                                                                                                                            |
@@ -118,6 +119,39 @@ directory selected in World Builder. Relative paths resolve under `maps`.
 MCP cannot grant itself another file root. Writes use the editor's staged
 file writer; replacing an existing file requires `overwrite: true` where
 the tool exposes that option. File tools do not open modal dialogs.
+
+## Clearing the grass
+
+The tall grass is baked into the terrain rather than placed as objects, so
+`wb_level_objects_query` and the selection tools never return it.
+`wb_grass_clear` takes it out of an upright box instead:
+
+- `ids` clears under placed props, doors, smart objects or items. Each
+  object's footprint is grown by `margin` metres, 0.5 by default and at
+  most 10, and reaches from two metres under its lowest point to its top.
+  An upright object gives a box turned with it; a tilted one, or a smart
+  object's assembly, the box around it.
+- `center` and `halfSize` clear an explicit box: its centre, and half its
+  size along its own two ground axes and up, each from 0.01 to 128 metres.
+  `yaw` turns it about the vertical, in degrees, counter-clockwise seen
+  from above.
+
+Both may be given in one call, which is one undo step. Every ID is checked
+before anything is cleared. The result lists the clearings made, each with
+its `id`, `center`, `halfSize`, `yaw`, and the `sectors` and `plants` the
+engine reported: the sixteen-metre terrain squares streamed in that the box
+reaches, and the plants taken out of them. A box whose ground is streamed
+out reports none and is applied when it streams in. A box cleared already
+is not cleared twice and is left out of the result. Plants a player can
+gather stay.
+
+`wb_grass_clearings_list` lists the clearings standing. `wb_grass_restore`
+gives the grass back for `ids`, or for every clearing with `all: true`, as
+one undo step; restoring releases the IDs. Clearing IDs are their own kind:
+the object tools do not take them.
+
+Clearings are saved with the project and exported as `grass` entries of the
+map's `world` array. `wb_document_get` shows them there.
 
 ## Doors, smart objects and items
 

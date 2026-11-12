@@ -6,6 +6,7 @@ set(KCDC_CLIENT_FILES
     src/features/area/area_collision.cpp
     src/features/area/area_collision_service.cpp
     src/features/grass/grass_module.cpp
+    src/features/prop/prop_editor_grass.cpp
     src/features/prop/prop_editor_map_travel.cpp
 
     # core/ -- application lifecycle and framework wiring

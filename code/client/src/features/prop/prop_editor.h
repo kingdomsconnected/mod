@@ -104,6 +104,12 @@ namespace KCDC::Features::Prop {
         bool layerOff = false; // hidden by the level's own layer switch
     };
 
+    /** One clearing in the terrain's grass as the panel sees it. */
+    struct GrassRow {
+        std::uint64_t id = 0;
+        Shared::Game::GrassClearing box;
+    };
+
     /** What the cursor rests on, refreshed a few times a second. */
     struct HoverInfo {
         bool valid      = false;
@@ -220,7 +226,8 @@ namespace KCDC::Features::Prop {
         std::vector<LightRow> lightRows;
         std::size_t liveEmitters = 0; // everything VfxService is playing, not only the editor's
         std::vector<WorldRow> worldRows;
-        std::vector<Shared::Game::LevelEditDefinition> worldDocument; // the level edits a save writes
+        std::vector<GrassRow> grassRows;
+        std::vector<Shared::Game::LevelEditDefinition> worldDocument; // the level edits a save writes, grass clearings included
         SelectionInfo selection;
 
         /** Selected besides `selection`, which the gizmo sits on; boxes for the outline. */
@@ -374,6 +381,8 @@ namespace KCDC::Features::Prop {
             Focus,
             DropToGround,
             FlattenPlants, // take the level's low plants out from under the selected placed objects; `value` the margin, `value2` the tallest plant taken
+            ClearGrass,   // take the terrain's grass out from under the selected placed objects; `value` the margin
+            RestoreGrass, // give the grass of clearing `id` back, or of every clearing when it is 0
             Import,
             HideWorld,
             RestoreWorld,
@@ -493,6 +502,20 @@ namespace KCDC::Features::Prop {
          * or locked, where newly adopted level objects belong.
          */
         std::size_t FlattenPlantsUnder(std::uint64_t placedId, const PlantFlattening &options, HistoryStep &step);
+
+        /**
+         * Clears the terrain's grass under a placed object, as `options`
+         * sizes the box, adding the clearing to `step`. Returns its id; 0
+         * when the object has no box, or the very same box is cleared
+         * already. `change` takes what the engine reported.
+         */
+        std::uint64_t ClearGrassUnder(std::uint64_t placedId, const GrassClearingOptions &options, HistoryStep &step, KCDC::Features::Grass::GrassChange &change);
+
+        /** Clears one explicit box, adding the clearing to `step`. 0 for a box that is not sane or is cleared already. */
+        std::uint64_t ClearGrassIn(const Shared::Game::GrassClearing &box, HistoryStep &step, KCDC::Features::Grass::GrassChange &change);
+
+        /** Gives the grass of one clearing back, adding that to `step`. */
+        bool RestoreGrass(std::uint64_t clearingId, HistoryStep &step);
 
         /** Re-reads what the cursor rests on. Throttled; game thread. */
         void RefreshHover();
@@ -626,6 +649,7 @@ namespace KCDC::Features::Prop {
         void RenderPlacementOptions();
         void RenderSceneTab(const EditorSnapshot &snapshot);
         void RenderLevelEdits(const EditorSnapshot &snapshot);
+        void RenderGrassClearings(const EditorSnapshot &snapshot);
         void RenderNearbyLevelObjects(const EditorSnapshot &snapshot);
         void RenderFiles(const EditorSnapshot &snapshot);
         void RenderDirectoryPicker();
@@ -781,6 +805,7 @@ namespace KCDC::Features::Prop {
         EditorEffects _effects;
         EditorLights _lights;
         WorldObjects _world;
+        EditorGrass _grass;
         EditorHistory _history;
         std::uint64_t _completedCommand = 0;
 
@@ -933,6 +958,7 @@ namespace KCDC::Features::Prop {
         char _levelFilter[64]        = {};
         char _levelEditFilter[64]    = {};
         bool _includeMovedLevelEdits = false;
+        GrassClearingOptions _grassDraft;
         float _levelRadius           = 40.0F;
         bool _levelEntities          = true;
         bool _levelGeometry          = true;

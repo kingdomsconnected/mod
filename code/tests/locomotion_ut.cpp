@@ -75,6 +75,7 @@
 #include "world_builder_figure_ut.h"
 #include "world_builder_poses_ut.h"
 #include "world_builder_keymap_ut.h"
+#include "world_builder_grass_ut.h"
 #include "world_builder_lights_ut.h"
 #include "world_builder_plants_ut.h"
 #include "world_builder_selection_ut.h"
@@ -502,6 +503,7 @@ int main(int argc, char **argv) {
     UNIT_MODULE(world_builder_authoring);
     UNIT_MODULE(world_builder_lights);
     UNIT_MODULE(world_builder_plants);
+    UNIT_MODULE(world_builder_grass);
     UNIT_MODULE(world_builder_selection);
     UNIT_MODULE(world_builder_keymap);
     UNIT_MODULE(world_builder_editor_preferences);

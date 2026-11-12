@@ -344,6 +344,7 @@ namespace KCDC::Features::Prop {
         _world.Forget();
         _effects.Forget();
         _lights.Forget();
+        _grass.Forget();
         _armedGhost     = 0;
         _armedEmitter   = 0;
         _armedModel     = AssetLibrary::kNone;
@@ -394,6 +395,7 @@ namespace KCDC::Features::Prop {
         _history.Clear();
 
         _world.RestoreAll();
+        _grass.Clear();
 
         ClearSelection();
         SetStatus("Scene cleared");
@@ -1011,6 +1013,8 @@ namespace KCDC::Features::Prop {
             case CommandKind::RestoreAllWorld:
             case CommandKind::DropToGround:
             case CommandKind::FlattenPlants:
+            case CommandKind::ClearGrass:
+            case CommandKind::RestoreGrass:
             case CommandKind::PlaceLight:
             case CommandKind::SetLightTuning:
             case CommandKind::SetEffectTuning:
@@ -1115,6 +1119,7 @@ namespace KCDC::Features::Prop {
             ClearUnresolved();
             _effects.Forget();
             _lights.Forget();
+            _grass.Forget();
             _layers          = EditorLayers();
             _layersPublished = std::make_shared<const EditorLayers>(_layers);
             _history.Clear();
@@ -1985,6 +1990,49 @@ namespace KCDC::Features::Prop {
         return copy;
     }
 
+    std::uint64_t MapEditor::ClearGrassIn(const Shared::Game::GrassClearing &box, HistoryStep &step, KCDC::Features::Grass::GrassChange &change) {
+        if (_grass.FindBox(box) != nullptr) {
+            return 0;
+        }
+        const std::uint64_t id = _grass.Add(box, &change);
+        if (id == 0) {
+            return 0;
+        }
+        HistoryAction action;
+        action.kind  = HistoryAction::Kind::GrassPlace;
+        action.id    = id;
+        action.grass = *_grass.Find(id);
+        step.actions.push_back(std::move(action));
+        return id;
+    }
+
+    std::uint64_t MapEditor::ClearGrassUnder(std::uint64_t placedId, const GrassClearingOptions &options, HistoryStep &step, KCDC::Features::Grass::GrassChange &change) {
+        const PlacedObject *object = _scene.Find(placedId);
+        SDK::AABB world {}, local {};
+        bool hasLocal = false;
+        Shared::Game::GrassClearing box;
+        if (object == nullptr || !_scene.FootprintBounds(placedId, world, local, hasLocal) || !GrassClearingUnder(object->position, object->rotation, object->scale, hasLocal ? &local : nullptr, world, options, box)) {
+            return 0;
+        }
+        return ClearGrassIn(box, step, change);
+    }
+
+    bool MapEditor::RestoreGrass(std::uint64_t clearingId, HistoryStep &step) {
+        const PlacedClearing *clearing = _grass.Find(clearingId);
+        if (clearing == nullptr) {
+            return false;
+        }
+        HistoryAction action;
+        action.kind  = HistoryAction::Kind::GrassDelete;
+        action.id    = clearingId;
+        action.grass = *clearing;
+        if (!_grass.Remove(clearingId)) {
+            return false;
+        }
+        step.actions.push_back(std::move(action));
+        return true;
+    }
+
     void MapEditor::ClearUnresolved() {
         _unresolvedDocument = MapDocument {};
         _unresolvedPublished.reset();
@@ -2058,6 +2106,12 @@ namespace KCDC::Features::Prop {
         std::size_t missing = 0;
         std::size_t waiting = 0;
         for (const Shared::Game::LevelEditDefinition &entry : document.world) {
+            // Grass names no object: the box goes to the clearings, in the same undo step.
+            if (entry.kind == Shared::Game::LevelEditKind::Grass) {
+                KCDC::Features::Grass::GrassChange ignored;
+                matched += entry.hidden && ClearGrassIn(entry.Clearing(), step, ignored) != 0 ? 1 : 0;
+                continue;
+            }
             const std::uint64_t id = _world.ApplyDocument(entry);
             const WorldEdit *edit  = id != 0 ? _world.Find(id) : nullptr;
             if (edit == nullptr) {
@@ -2217,6 +2271,7 @@ namespace KCDC::Features::Prop {
         case CommandKind::GroupSelection:
         case CommandKind::DropToGround:
         case CommandKind::FlattenPlants:
+        case CommandKind::ClearGrass:
             for (const auto &ref : SelectionRefs()) {
                 if (!CanEdit(ref)) {
                     SetStatus("Selection includes a hidden or locked layer.");
@@ -2335,6 +2390,7 @@ namespace KCDC::Features::Prop {
             _effects.Clear();
             _lights.Clear();
             _world.RestoreAll();
+            _grass.Clear();
             ClearSelection();
             if (command.document != nullptr) {
                 _layers = command.document->layers;
@@ -2890,7 +2946,7 @@ namespace KCDC::Features::Prop {
             const auto authoredSerial = _history.AuthoredRestoreSerial();
             std::string label;
             std::vector<SelectionRef> touched;
-            SetStatus(_history.Undo(_scene, _world, _effects, _lights, label, &_layers, &touched) ? "Undid: " + label : std::string {"Nothing to undo"});
+            SetStatus(_history.Undo(_scene, _world, _effects, _lights, _grass, label, &_layers, &touched) ? "Undid: " + label : std::string {"Nothing to undo"});
             SelectTouched(touched);
             if (_history.AuthoredRestoreSerial() != authoredSerial) {
                 _patrolPreview.Stop();
@@ -2905,7 +2961,7 @@ namespace KCDC::Features::Prop {
             const auto authoredSerial = _history.AuthoredRestoreSerial();
             std::string label;
             std::vector<SelectionRef> touched;
-            SetStatus(_history.Redo(_scene, _world, _effects, _lights, label, &_layers, &touched) ? "Redid: " + label : std::string {"Nothing to redo"});
+            SetStatus(_history.Redo(_scene, _world, _effects, _lights, _grass, label, &_layers, &touched) ? "Redid: " + label : std::string {"Nothing to redo"});
             SelectTouched(touched);
             if (_history.AuthoredRestoreSerial() != authoredSerial) {
                 _patrolPreview.Stop();
@@ -3026,6 +3082,64 @@ namespace KCDC::Features::Prop {
             }
             _history.Record(std::move(step), &_layers);
             std::snprintf(message, sizeof(message), "Took %zu plant%s out from under %zu object%s -- Ctrl+Z puts them back", flattened, flattened == 1 ? "" : "s", objects, objects == 1 ? "" : "s");
+            SetStatus(message);
+            break;
+        }
+
+        case CommandKind::ClearGrass: {
+            GrassClearingOptions options;
+            options.margin = command.value;
+            HistoryStep step;
+            step.label          = "Clear the grass";
+            std::size_t objects = 0;
+            KCDC::Features::Grass::GrassChange total;
+            for (const SelectionRef &ref : SelectionRefs()) {
+                if (ref.kind != SelectionKind::Placed) {
+                    continue;
+                }
+                ++objects;
+                KCDC::Features::Grass::GrassChange change;
+                if (ClearGrassUnder(ref.id, options, step, change) != 0) {
+                    total.sectors += change.sectors;
+                    total.plants  += change.plants;
+                }
+            }
+            if (objects == 0) {
+                SetStatus("Select something you placed to clear the grass under it");
+                break;
+            }
+            if (step.actions.empty()) {
+                SetStatus("Nothing new to clear: the selection has no box, or the grass under it is cleared already");
+                break;
+            }
+            const std::size_t cleared = step.actions.size();
+            _history.Record(std::move(step), &_layers);
+            std::snprintf(message, sizeof(message), "Cleared the grass under %zu object%s: %zu plant%s went -- Ctrl+Z brings them back", cleared, cleared == 1 ? "" : "s", total.plants, total.plants == 1 ? "" : "s");
+            SetStatus(message);
+            break;
+        }
+
+        case CommandKind::RestoreGrass: {
+            std::vector<std::uint64_t> ids;
+            if (command.id != 0) {
+                ids.push_back(command.id);
+            }
+            else {
+                for (const PlacedClearing &clearing : _grass.Clearings()) {
+                    ids.push_back(clearing.id);
+                }
+            }
+            HistoryStep step;
+            step.label = "Give the grass back";
+            for (const std::uint64_t id : ids) {
+                RestoreGrass(id, step);
+            }
+            if (step.actions.empty()) {
+                break;
+            }
+            const std::size_t restored = step.actions.size();
+            _history.Record(std::move(step), &_layers);
+            std::snprintf(message, sizeof(message), "Gave the grass of %zu clearing%s back -- Ctrl+Z clears it again", restored, restored == 1 ? "" : "s");
             SetStatus(message);
             break;
         }
@@ -3686,6 +3800,10 @@ namespace KCDC::Features::Prop {
             snapshot.worldRows.push_back(std::move(row));
         }
         _world.ToDocument(snapshot.worldDocument);
+        for (const PlacedClearing &clearing : _grass.Clearings()) {
+            snapshot.grassRows.push_back(GrassRow {clearing.id, clearing.box});
+        }
+        _grass.ToDocument(snapshot.worldDocument);
 
         auto published = std::make_shared<const EditorSnapshot>(std::move(snapshot));
         std::scoped_lock lock(_snapshotMutex);
@@ -4900,6 +5018,7 @@ namespace KCDC::Features::Prop {
             return row.hidden || row.swapped;
         });
         const std::string deletedLabel = "Deleted (" + std::to_string(deleted) + ")###level_deleted";
+        const std::string grassLabel   = "Grass (" + std::to_string(snapshot.grassRows.size()) + ")###level_grass";
         if (ImGui::BeginTabBar("##level_lists")) {
             if (ImGui::BeginTabItem("Nearby")) {
                 RenderNearbyLevelObjects(snapshot);
@@ -4907,6 +5026,10 @@ namespace KCDC::Features::Prop {
             }
             if (ImGui::BeginTabItem(deletedLabel.c_str())) {
                 RenderLevelEdits(snapshot);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(grassLabel.c_str())) {
+                RenderGrassClearings(snapshot);
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
@@ -5007,6 +5130,52 @@ namespace KCDC::Features::Prop {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::TextDisabled("No matching level edits.");
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    void MapEditor::RenderGrassClearings(const EditorSnapshot &snapshot) {
+        ImGui::Spacing();
+        ImGui::TextWrapped("The tall grass is baked into the terrain, not placed as objects. A clearing takes it out of a box so it does not grow through a floor: select what you placed and use Clear the grass under it in the Object tab. Herbs a player can gather stay.");
+        ImGui::SetNextItemWidth(120.0F);
+        ImGui::DragFloat("Margin", &_grassDraft.margin, 0.05F, GrassClearingOptions::kMinMargin, GrassClearingOptions::kMaxMargin, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
+        HelpMarker("Metres added around an object's footprint when the grass under it is cleared.");
+
+        ImGui::BeginDisabled(snapshot.grassRows.empty());
+        if (ImGui::Button("Give all the grass back", ImVec2(-1.0F, 0.0F))) {
+            Command command;
+            command.kind = CommandKind::RestoreGrass;
+            Queue(std::move(command));
+        }
+        ImGui::EndDisabled();
+
+        if (ImGui::BeginTable("##kcdc_editor_grass", 3, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp, ImVec2(0.0F, std::max(ImGui::GetContentRegionAvail().y, 160.0F)))) {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("Clearing", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 110.0F);
+            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80.0F);
+            ImGui::TableHeadersRow();
+            for (const GrassRow &row : snapshot.grassRows) {
+                ImGui::PushID(static_cast<int>(row.id) + 0x50000000);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%.1f, %.1f, %.1f", row.box.center.x, row.box.center.y, row.box.center.z);
+                ImGui::TableNextColumn();
+                ImGui::Text("%.1f x %.1f m", row.box.halfSize.x * 2.0F, row.box.halfSize.y * 2.0F);
+                ImGui::TableNextColumn();
+                if (ImGui::SmallButton("Give back")) {
+                    Command command;
+                    command.kind = CommandKind::RestoreGrass;
+                    command.id   = row.id;
+                    Queue(std::move(command));
+                }
+                ImGui::PopID();
+            }
+            if (snapshot.grassRows.empty()) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("No clearings.");
             }
             ImGui::EndTable();
         }
@@ -5288,6 +5457,15 @@ namespace KCDC::Features::Prop {
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
                 ImGui::SetTooltip("Takes the level's low plants out from under every selected object you placed, as one undo step.\nThe margin and the tallest plant taken are set under Placement in the Library tab.\nGrass merged into the terrain is not an object and stays.");
+            }
+            if (ImGui::Button("Clear the grass under it", ImVec2(-1.0F, 0.0F))) {
+                Command command;
+                command.kind  = CommandKind::ClearGrass;
+                command.value = _grassDraft.margin;
+                Queue(std::move(command));
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                ImGui::SetTooltip("Takes the tall grass baked into the terrain out from under every selected object you placed, as one undo step.\nThe margin, and every clearing made, are under Level > Grass. Saved and exported as level edits.\nHerbs a player can gather stay.");
             }
 
             if (DangerButton("Delete [Del]", ImVec2(-1.0F, 0.0F))) {

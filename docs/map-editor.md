@@ -423,7 +423,8 @@ searched in smaller pieces; the status line says when a search was still cut
 short. Level objects a tool selected that nothing changed are let go the next
 time you use a selection tool, so they never reach the saved project. Grass
 and small plants are merged into the level's terrain detail and cannot be
-selected.
+selected; [Clearing the grass](#clearing-the-grass) takes them out of a box
+instead.
 
 These are the default keys. The **Keys** tab changes any of them: click an
 action, then press the new key with any Ctrl, Shift or Alt it needs; Escape,
@@ -522,6 +523,56 @@ an object is streamed out the row says **far**. From far off, the level's
 baked distant mesh still shows the original; up close it is gone.
 
 Placed props cast shadows.
+
+### Clearing the grass
+
+The tall grass, and the flowers and ferns that grow with it, are not objects.
+The level bakes them into its terrain, a sixteen-metre square at a time, so
+nothing in the Level tab lists them and no selection tool reaches them. A
+floor placed in a meadow has the grass coming up through it.
+
+To take it out, select what you placed and click **Clear the grass under
+it** in the Object tab. Every such plant rooted under each selected object
+goes: inside its footprint grown by a margin, from two metres under its
+lowest point, for a floor set on a slope, up to its top. An object standing
+upright clears a patch turned with it, so a house set at an angle clears a
+house-shaped patch; a tilted one, or a smart object's assembly, clears the
+box around it. The whole selection is one undo step.
+
+**Level → Grass (count)** lists the clearings with their centre and size.
+**Give back** brings the grass of one back, **Give all the grass back**
+every one, and Ctrl+Z undoes either. **Margin** sets how far around a
+footprint the next clearing reaches, half a metre by default.
+
+A clearing is a box in the level, not a property of the object: moving or
+deleting the object afterwards leaves it where it was made. Give it back
+and clear again. Clearings overlap freely; a plant returns only when the
+last box holding it goes.
+
+Plants a player can gather are left standing. The game keeps its own count
+of those for regrowth, and a herb hidden here would still be offered to the
+hand. Trees, bushes and the leaf litter the level placed one by one are
+objects: select and delete those as any other.
+
+Clearings are saved with the project and exported in the map's `world`
+array as `grass` entries, so a server running the export clears the same
+boxes for every player:
+
+```json
+{ "kind": "grass", "at": [1203.5, 2210.25, 41.0], "halfSize": [6.5, 4.5, 3.0], "yaw": 30.0, "hidden": true }
+```
+
+`at` is the centre of the box, `halfSize` half its size along its own two
+ground axes and up, each from 0.01 to 128 metres, and `yaw` its turn about
+the vertical in degrees, counter-clockwise seen from above. A script makes
+one with `LevelEdit.apply` and the same object; `edit.hidden = false` gives
+the grass back while keeping the edit, and `edit.restore()` drops it.
+
+The grass goes within the second, and comes back as fast when a clearing is
+given back. The game reads the grass from the level again each time a
+stretch of ground streams in; a clearing is applied again there before that
+ground is first drawn, so it holds through travel and a reload of the
+level, and for players who arrive later.
 
 ### Areas (Areas tab)
 

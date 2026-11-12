@@ -131,6 +131,13 @@ namespace KCDC::Features::Prop {
 
         /** An object's world box read off what stands for it now, without waiting for a refresh. False when it has none. */
         bool LiveBounds(std::uint64_t id, SDK::AABB &bounds) const;
+        /**
+         * The boxes a footprint is built from, read off what stands for the
+         * object now rather than off the last refresh: its world box, and
+         * for a mesh its own unscaled box as well. False when it has no
+         * usable world box.
+         */
+        bool FootprintBounds(std::uint64_t id, SDK::AABB &world, SDK::AABB &local, bool &hasLocal) const;
 
         /** The object built on `entityId`, or 0. */
         std::uint64_t FindByEntityId(SDK::EntityId entityId) const;

@@ -155,6 +155,13 @@ namespace KCDC::Features::Prop {
         add("wb_level_object_update", "Adopt a browsed object and move, scale, rotate, hide or swap it with editor history. `model` stands an asset-library mesh in its place, collision included; an empty string takes the swap back.", false,
             {{"id", Text()}, {"position", Vector(3)}, {"rotation", Vector(4, -1, 1)}, {"scale", Vector(3, 0.01F, 100)}, {"hidden", boolean}, {"model", {{"type", "string"}, {"maxLength", 260}}}}, {"id"});
         add("wb_level_edits_restore", "Restore explicit adopted level objects or all edits. Restoring releases their IDs.", false, {{"ids", ids}, {"all", boolean}});
+        add("wb_grass_clear",
+            "Take the tall grass baked into the terrain out of the world: under placed props, doors, smart objects or items (`ids`, each footprint grown by `margin` metres, 0.5 by default, and turned with an upright object), in an explicit upright box (`center`, `halfSize` "
+            "along its two ground axes and up, `yaw` in degrees, counter-clockwise from above), or both. The grass is not objects, so no level-object tool reaches it; plants a player can gather stay. One undo step; each clearing is saved and exported as a `grass` entry of "
+            "the map's `world` array. Returns the clearings made, with how many plants went from the sectors streamed in.",
+            false, {{"ids", ids}, {"margin", Number(GrassClearingOptions::kMinMargin, GrassClearingOptions::kMaxMargin)}, {"center", Vector(3)}, {"halfSize", Vector(3, Shared::Game::GrassClearing::kMinHalfSize, Shared::Game::GrassClearing::kMaxHalfSize)}, {"yaw", Number(-360, 360)}});
+        add("wb_grass_clearings_list", "List the clearings standing in the terrain's grass: each one's ID, centre, half sizes and yaw in degrees.", true);
+        add("wb_grass_restore", "Give the grass of explicit clearings back, or of all of them, as one undo step. Restoring releases their IDs.", false, {{"ids", ids}, {"all", boolean}});
         add("wb_camera_get", "Read the editor camera pose and lens.", true);
         add("wb_camera_set", "Set camera position, angles, movement speed or field of view.", false, {{"position", Vector(3)}, {"yaw", Number(-36000, 36000)}, {"pitch", Number(-89, 89)}, {"fov", Number(20, 140)}, {"speed", Number(0.05F, 400)}});
         add("wb_camera_frame", "Frame a world position or current native selection.", false, {{"position", Vector(3)}, {"distance", Number(0.1F, 10000)}});
@@ -973,8 +980,8 @@ namespace KCDC::Features::Prop {
                 std::string label;
                 std::vector<SelectionRef> touched;
                 const auto authoredSerial = editor._history.AuthoredRestoreSerial();
-                const bool changed        = name == "wb_history_undo" ? editor._history.Undo(editor._scene, editor._world, editor._effects, editor._lights, label, &editor._layers, &touched)
-                                                                      : editor._history.Redo(editor._scene, editor._world, editor._effects, editor._lights, label, &editor._layers, &touched);
+                const bool changed        = name == "wb_history_undo" ? editor._history.Undo(editor._scene, editor._world, editor._effects, editor._lights, editor._grass, label, &editor._layers, &touched)
+                                                                      : editor._history.Redo(editor._scene, editor._world, editor._effects, editor._lights, editor._grass, label, &editor._layers, &touched);
                 editor.SelectTouched(touched);
                 if (editor._history.AuthoredRestoreSerial() != authoredSerial) {
                     editor._patrolPreview.Stop();
@@ -1117,6 +1124,114 @@ namespace KCDC::Features::Prop {
                         }
                     }
                     result = describe(target);
+                }
+            }
+            else if (name == "wb_grass_clear" || name == "wb_grass_clearings_list" || name == "wb_grass_restore") {
+                const std::string grassPrefix = prefix + "grass/";
+                const auto describeClearing   = [&](const PlacedClearing &clearing) {
+                    return nlohmann::json {{"id", grassPrefix + std::to_string(clearing.id)}, {"center", {clearing.box.center.x, clearing.box.center.y, clearing.box.center.z}}, {"halfSize", {clearing.box.halfSize.x, clearing.box.halfSize.y, clearing.box.halfSize.z}}, {"yaw", clearing.box.yawDegrees}};
+                };
+                if (name == "wb_grass_clearings_list") {
+                    auto clearings = nlohmann::json::array();
+                    for (const PlacedClearing &clearing : editor._grass.Clearings()) {
+                        clearings.push_back(describeClearing(clearing));
+                    }
+                    result = {{"count", clearings.size()}, {"clearings", std::move(clearings)}};
+                }
+                else if (name == "wb_grass_clear") {
+                    const bool hasBox = args.contains("center") || args.contains("halfSize") || args.contains("yaw");
+                    if (!args.contains("ids") && !hasBox) {
+                        throw std::runtime_error("Specify ids, or a box as center and halfSize");
+                    }
+                    GrassClearingOptions options;
+                    options.margin = args.value("margin", options.margin);
+                    Shared::Game::GrassClearing box;
+                    if (hasBox) {
+                        if (!args.contains("center") || !args.contains("halfSize")) {
+                            throw std::runtime_error("A box needs both center and halfSize");
+                        }
+                        box.center   = glm::vec3 {args["center"][0].get<float>(), args["center"][1].get<float>(), args["center"][2].get<float>()};
+                        box.halfSize = glm::vec3 {args["halfSize"][0].get<float>(), args["halfSize"][1].get<float>(), args["halfSize"][2].get<float>()};
+                        box.yawDegrees = args.value("yaw", 0.0F);
+                        if (!box.IsSane()) {
+                            throw std::runtime_error("The box is not finite or within its limits");
+                        }
+                    }
+                    // Every ID is read before anything is cleared, so a bad one changes nothing.
+                    std::vector<SelectionRef> targets;
+                    std::unordered_set<std::string> seen;
+                    if (args.contains("ids")) {
+                        for (const auto &value : args["ids"]) {
+                            if (!seen.insert(value.get<std::string>()).second) {
+                                throw std::runtime_error("Object IDs must be unique");
+                            }
+                            targets.push_back(ref(value));
+                            if (targets.back().kind != SelectionKind::Placed) {
+                                throw std::runtime_error("Grass is cleared under placed props, doors, smart objects and items only; nothing was changed");
+                            }
+                        }
+                    }
+                    HistoryStep step;
+                    step.label     = "MCP clear the grass";
+                    auto clearings = nlohmann::json::array();
+                    const auto add = [&](std::uint64_t clearingId, const KCDC::Features::Grass::GrassChange &change) {
+                        if (clearingId != 0) {
+                            auto entry       = describeClearing(*editor._grass.Find(clearingId));
+                            entry["sectors"] = change.sectors;
+                            entry["plants"]  = change.plants;
+                            clearings.push_back(std::move(entry));
+                        }
+                    };
+                    for (const SelectionRef &target : targets) {
+                        KCDC::Features::Grass::GrassChange change;
+                        add(editor.ClearGrassUnder(target.id, options, step, change), change);
+                    }
+                    if (hasBox) {
+                        KCDC::Features::Grass::GrassChange change;
+                        add(editor.ClearGrassIn(box, step, change), change);
+                    }
+                    if (!step.actions.empty()) {
+                        editor._history.Record(std::move(step), &editor._layers);
+                    }
+                    result = {{"cleared", clearings.size()}, {"clearings", std::move(clearings)}};
+                }
+                else {
+                    if (args.value("all", false) && args.contains("ids")) {
+                        throw std::runtime_error("Specify either ids or all=true, not both");
+                    }
+                    std::vector<std::uint64_t> targets;
+                    if (args.value("all", false)) {
+                        for (const PlacedClearing &clearing : editor._grass.Clearings()) {
+                            targets.push_back(clearing.id);
+                        }
+                    }
+                    else {
+                        if (!args.contains("ids")) {
+                            throw std::runtime_error("Specify ids or all=true");
+                        }
+                        for (const auto &value : args["ids"]) {
+                            const std::string text = value.get<std::string>();
+                            std::uint64_t number   = 0;
+                            const auto parsed      = text.starts_with(grassPrefix) ? std::from_chars(text.data() + grassPrefix.size(), text.data() + text.size(), number) : std::from_chars_result {text.data(), std::errc::invalid_argument};
+                            if (parsed.ec != std::errc {} || parsed.ptr != text.data() + text.size() || editor._grass.Find(number) == nullptr) {
+                                throw std::runtime_error("Unknown clearing ID; nothing was changed");
+                            }
+                            if (std::find(targets.begin(), targets.end(), number) != targets.end()) {
+                                throw std::runtime_error("Clearing IDs must be unique");
+                            }
+                            targets.push_back(number);
+                        }
+                    }
+                    HistoryStep step;
+                    step.label = "MCP give the grass back";
+                    for (const std::uint64_t clearingId : targets) {
+                        editor.RestoreGrass(clearingId, step);
+                    }
+                    const std::size_t restored = step.actions.size();
+                    if (restored != 0) {
+                        editor._history.Record(std::move(step), &editor._layers);
+                    }
+                    result = {{"restored", restored}};
                 }
             }
             else if (name == "wb_level_edits_restore") {
@@ -1303,7 +1418,7 @@ namespace KCDC::Features::Prop {
                 for (const auto &entry : args.at("steps")) {
                     const auto toolName                           = entry.at("tool").get<std::string>();
                     static constexpr std::string_view supported[] = {"wb_objects_query", "wb_object_get", "wb_props_create", "wb_effects_create", "wb_lights_create", "wb_light_update", "wb_objects_transform", "wb_effect_update", "wb_prop_physics_set", "wb_prop_collision_rebuild",
-                        "wb_object_settings_update", "wb_objects_duplicate", "wb_objects_convert", "wb_objects_delete", "wb_objects_drop_to_ground", "wb_plants_flatten", "wb_groups_update", "wb_level_objects_query", "wb_level_object_get", "wb_level_object_update", "wb_level_edits_restore",
+                        "wb_object_settings_update", "wb_objects_duplicate", "wb_objects_convert", "wb_objects_delete", "wb_objects_drop_to_ground", "wb_plants_flatten", "wb_groups_update", "wb_level_objects_query", "wb_level_object_get", "wb_level_object_update", "wb_level_edits_restore", "wb_grass_clear", "wb_grass_clearings_list", "wb_grass_restore",
                         "wb_camera_set", "wb_camera_frame", "wb_raycast", "wb_pose_anchors_query", "wb_pick_at", "wb_ground_probe", "wb_project_points"};
                     if (std::find(std::begin(supported), std::end(supported), toolName) == std::end(supported)) {
                         throw std::runtime_error("Tool is not supported inside a batch: " + toolName);
