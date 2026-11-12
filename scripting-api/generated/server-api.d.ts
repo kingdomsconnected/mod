@@ -6311,6 +6311,11 @@ declare global {
      * What a script finds it by, up to 64 bytes of UTF-8.
      */
     name?: string | undefined;
+
+    /**
+     * True to place it without the blueprint's furniture: only the place a body takes, or the station, and the prompts that offer it, for a prop of your own choosing to stand there instead. Only a blueprint `SmartObject.blueprints()` lists with `bare` takes it. False when omitted.
+     */
+    bare?: boolean | undefined;
   }
 
   /**
@@ -6331,6 +6336,11 @@ declare global {
      * How many bodies can sit or lie on it at once.
      */
     seats: number;
+
+    /**
+     * Whether it can be placed `bare`: false for one whose furniture is one of its own entities, like a chair, or that has none.
+     */
+    bare: boolean;
   }
 
   /**
@@ -6414,6 +6424,11 @@ declare global {
     readonly name: string;
 
     /**
+     * Whether it was placed without its blueprint's furniture: only the place a body takes, or the station, and the prompts that offer it.
+     */
+    readonly bare: boolean;
+
+    /**
      * The GUID of its station part as sixteen lowercase hex digits: the `id` `Dice.tables()` and `SmartObject.stations()` give it. `Crafting.stations()` lists an alchemy table or a smithy as `<level>:<stationId>`. Empty for a seat or a bed. It lasts only until the server stops.
      */
     readonly stationId: string;
@@ -6441,10 +6456,10 @@ declare global {
     toJSON(): SmartObjectDefinition | null;
 
     /**
-     * Places one of the game's interactive prefabs -- its furniture, solid, and the entities its interaction runs on -- for every player in the virtual world, built on each client under the same GUIDs, so sitting on it and working at it replicate as they do at the level's own. A placed dice table, crafting station, drying rack or smokehouse joins `Dice.tables()`, `Crafting.stations()` and the server's checks like the level's own. Kept in memory only: place it again on boot. The resource that places it owns it, so it goes when that resource stops. NPCs do not use it.
+     * Places one of the game's interactive prefabs -- its furniture, solid, and the entities its interaction runs on -- for every player in the virtual world, built on each client under the same GUIDs, so sitting on it and working at it replicate as they do at the level's own. A placed dice table, crafting station, drying rack or smokehouse joins `Dice.tables()`, `Crafting.stations()` and the server's checks like the level's own. Kept in memory only: place it again on boot. The resource that places it owns it, so it goes when that resource stops. NPCs do not use it. A `bare` definition places the entities without the furniture, where a prop of your own stands.
      * @param definition What to place and where, in the format of one entry of a World Builder map's `smartObjects` array.
      * @param virtualWorld Optional virtual world whose players see it; the global one when omitted.
-     * @returns The smart object. Throws for an unknown blueprint or a transform that is not finite.
+     * @returns The smart object. Throws for an unknown blueprint, a transform that is not finite, or `bare` on a blueprint that cannot stand bare.
      */
     static spawn(definition: SmartObjectDefinition, virtualWorld?: number): SmartObject;
 

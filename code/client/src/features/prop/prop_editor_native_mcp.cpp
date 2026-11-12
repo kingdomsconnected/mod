@@ -94,13 +94,14 @@ namespace KCDC::Features::Prop {
             {{"query", Text()}, {"kind", {{"type", "string"}, {"enum", {"all", "prop", "effect", "light", "world"}}}}, {"offset", {{"type", "integer"}, {"minimum", 0}}}, {"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 500}}}});
         add("wb_object_get", "Read an object using its opaque ID. Returns an operation.", true, {{"id", Text()}}, {"id"});
         // Every field a door, smart object or item takes; each kind reads its own and refuses what it does not know the value of.
-        const auto settings = Object({{"name", Text(64)}, {"locked", boolean}, {"lock", {{"type", "string"}, {"enum", {"none", "bolt", "boltAndKey", "key"}}}}, {"lockpickable", boolean}, {"lockDifficulty", Number(0, 1)}, {"keyItem", Text(36)},
+        const auto settings = Object({{"name", Text(64)}, {"bare", boolean}, {"locked", boolean}, {"lock", {{"type", "string"}, {"enum", {"none", "bolt", "boltAndKey", "key"}}}}, {"lockpickable", boolean}, {"lockDifficulty", Number(0, 1)}, {"keyItem", Text(36)},
             {"amount", {{"type", "integer"}, {"minimum", 1}, {"maximum", 10000}}}, {"quality", {{"type", "integer"}, {"minimum", 0}, {"maximum", 255}}}, {"health", Number(0, 1)}, {"condition", Number(0, 1)}});
         add("wb_props_create",
             "Place a catalog prop at an explicit pose, or a door, smart object or item by the library key wb_assets_search lists for it: `door:<leaf path or stem>`, `smart:<blueprint>`, `item:<class GUID or name>`. Those take `settings` -- a door's name, locked, lock "
-            "(none, bolt, boltAndKey, key), lockpickable, lockDifficulty and keyItem; a smart object's name; an item's name, amount, quality, health and condition -- and no scale or physics: the server builds the real one from the export. Returns its opaque ID through an operation.",
+            "(none, bolt, boltAndKey, key), lockpickable, lockDifficulty and keyItem; a smart object's name and bare (true leaves the blueprint's furniture out and keeps the seat, bed or station, for a prop to stand there; refused for a blueprint with no furniture of its own to leave out); an item's name, amount, quality, health and condition -- and no scale or physics: the server builds the real one from the export. Returns its opaque ID through an operation.",
             false, {{"model", Text(1024)}, {"position", Vector(3)}, {"rotation", Vector(4, -1, 1)}, {"scale", Vector(3, 0.01F, 100)}, {"physics", physics}, {"settings", settings}, {"group", Text()}}, {"model", "position"});
-        add("wb_object_settings_update", "Replace a placed door's, smart object's or item's settings, checked as the server will load them, as one undo step. Omitted fields take their defaults.", false, {{"id", Text()}, {"settings", settings}}, {"id", "settings"});
+        add("wb_object_settings_update", "Replace a placed door's, smart object's or item's settings, checked as the server will load them, as one undo step. Omitted fields take their defaults. Changing a smart object's bare rebuilds its preview with or without its furniture.",
+            false, {{"id", Text()}, {"settings", settings}}, {"id", "settings"});
         add("wb_effects_create", "Place a catalog particle effect.", false, {{"effect", Text(1024)}, {"position", Vector(3)}, {"rotation", Vector(4, -1, 1)}, {"tuning", tuning}, {"group", Text()}}, {"effect", "position"});
         add("wb_lights_create", "Place a standalone point light. Color is RGB from 0 to 1, intensity is a diffuse multiplier, radius is metres, and castShadows defaults to false.", false,
             {{"position", Vector(3, -16384, 16384)}, {"color", Vector(3, 0, 1)}, {"intensity", Number(0, 100)}, {"radius", Number(0.1F, 100)}, {"castShadows", boolean}, {"group", Text()}}, {"position"});
@@ -317,6 +318,9 @@ namespace KCDC::Features::Prop {
                         {"collisionRebuildFailed", object.collisionRebuildFailed}});
                     if (object.kind != PlacedKind::Prop) {
                         result.update({{"key", WorldObjectKey(object.kind, object.model)}, {"settings", object.settings}, {"built", object.entityId != 0}});
+                    }
+                    if (object.kind == PlacedKind::SmartObject) {
+                        result["takesBare"] = WorldObjectTakesBare(object.kind, object.model);
                     }
                 }
                 else if (item.kind == SelectionKind::Light) {

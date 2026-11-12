@@ -5461,6 +5461,24 @@ namespace KCDC::Features::Prop {
             optionalFraction("Own condition", "condition", "Off: the class's own. On: 0 is filthy, 1 is clean.");
         }
         else if (selection.placedKind == PlacedKind::SmartObject) {
+            const bool takesBare = WorldObjectTakesBare(selection.placedKind, selection.model);
+            bool bare            = WorldObjectStandsBare(_settingsDraft);
+            ImGui::BeginDisabled(!takesBare);
+            if (ImGui::Checkbox("Only the pose, without its furniture", &bare)) {
+                if (bare) {
+                    _settingsDraft["bare"] = true;
+                }
+                else {
+                    _settingsDraft.erase("bare");
+                }
+                commit = true;
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("%s",
+                    takesBare ? "Leaves the blueprint's own furniture out and keeps what the game sits, lays or works a body at,\nso a prop of your choice can stand there instead: place the prop, then this on it.\nThe pose anchors show where the body goes. The export carries it."
+                              : "This blueprint's furniture is one of its own entities, or it has none:\nthere is nothing to leave out.");
+            }
             ImGui::TextDisabled("Sits, sleeps, gambles or crafts as the level's own does once a server loads the export.");
         }
 

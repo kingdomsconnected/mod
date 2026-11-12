@@ -39,7 +39,12 @@ namespace KCDC::Features::SmartObject {
             Refused,
         };
 
-        BuildResult Build(const Shared::Game::SmartObjectBlueprint &blueprint, std::uint64_t guidBase, const glm::vec3 &position, const glm::quat &rotation);
+        /**
+         * `bare` leaves the furniture out: every part still stands, so the
+         * interaction is whole, and no brush is built -- for a place a prop
+         * of the mapper's own choosing stands at instead.
+         */
+        BuildResult Build(const Shared::Game::SmartObjectBlueprint &blueprint, std::uint64_t guidBase, const glm::vec3 &position, const glm::quat &rotation, bool bare);
 
         /** Poses every part and brush again for a new pose of the whole. */
         void Move(const glm::vec3 &position, const glm::quat &rotation);
@@ -64,14 +69,23 @@ namespace KCDC::Features::SmartObject {
         /** Whether `entityId` is one of its parts. */
         bool OwnsEntity(SDK::EntityId entityId) const;
 
-        /** The box around every part and brush; false when nothing stands. */
+        /**
+         * The box around every part and brush; false when nothing stands.
+         * A bare one has no furniture to measure and its seats and triggers
+         * have no mesh, so each of its parts counts as a small box around
+         * its own origin: the whole can still be picked, outlined and framed.
+         */
         bool Bounds(SDK::AABB &bounds) const;
+
+        /** Half the side of the box a bare assembly's part counts as, in metres. */
+        static constexpr float kBarePartReach = 0.15F;
 
       private:
         void ForgetFixtures();
 
         const Shared::Game::SmartObjectBlueprint *_blueprint = nullptr;
         std::uint64_t _guidBase                              = 0;
+        bool _bare                                           = false;
         std::vector<SDK::EntityId> _parts;
         std::vector<KCDC::Common::Spawn::StaticBrush> _brushes;
     };

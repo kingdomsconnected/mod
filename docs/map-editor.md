@@ -135,10 +135,13 @@ the anchor; it does not sit. To see the pose itself, press F7 and use the
 object as a player: an interactive object you placed stands assembled, so a
 bench can be sat on and a bed lain on without a server.
 
-A pose belongs to the interactive object that brings it. A mesh from the
-asset library has none, and the editor cannot bind one to it: to make a
-bench players can sit on, place one from **`interactive` -> `seats`**
-rather than a bench mesh.
+A pose belongs to the interactive object that brings it; a mesh from the
+asset library has none. To make a bench players can sit on, place one from
+**`interactive` -> `seats`**. To have them sit on a mesh of your own
+choosing instead, place that mesh, place the interactive object on it, and
+tick **Only the pose, without its furniture** in its Object tab: its own
+bench goes and its anchors stay, for you to line up with the mesh. See
+[Doors, interactive objects and items](#doors-interactive-objects-and-items).
 
 ### Conditions (Environment tab)
 
@@ -294,6 +297,20 @@ place of Scale and Physics. Each change is one undo step.
   item class GUID of the key that opens it.
 - An item: **Amount**, **Quality** (0 for the class's own), and **Own
   health** and **Own condition** (off uses the class's own).
+- An interactive object: **Only the pose, without its furniture**. Ticked,
+  the object stands without the mesh its blueprint brings -- the bench, the
+  bed frame, the table -- and keeps what the game sits, lays or works a
+  body at, and the prompt that offers it. Put it where a mesh of your own
+  stands and players sit on that mesh. Nothing of it is drawn then, so turn
+  the [pose anchors](#pose-anchors) on to see it: its dots mark where a
+  body goes and which way it faces, and the scale figure stands on them.
+  Click near a dot to select it, or pick it in the Scene tab. The mesh you
+  put there is an ordinary prop: it does not move with the object, so
+  select both, or group them, to move them together. The pose is the
+  blueprint's own -- a low bench's seat height stays a low bench's -- so
+  choose the blueprint that matches your mesh. The box is greyed for a
+  chair, whose seat is one of its own moving parts, and for the smokehouse,
+  which has no furniture to leave out.
 
 The level's own doors and stations are level objects: select one and delete
 it as any other, and the export takes it out on the server too. The level's

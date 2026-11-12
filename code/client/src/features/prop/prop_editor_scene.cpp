@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <utility>
 
 #include "core/application.h"
 #include "sdk/cryengine/entitysystem/i_entity.h"
@@ -138,7 +139,8 @@ namespace KCDC::Features::Prop {
         }
         auto assembly                = std::make_unique<SmartObject::SmartObjectAssembly>();
         const std::uint64_t guidBase = kPreviewSmartObjectGuidTag | ((++_previewSerial & 0xFFFFFFFFFFULL) << 8);
-        if (assembly->Build(*blueprint, guidBase, KCDC::Common::ToGlm(object.position), KCDC::Common::ToGlm(object.rotation)) != SmartObject::SmartObjectAssembly::BuildResult::Built || assembly->Parts().empty()) {
+        // The preview stands as the server will build it: without its furniture when the export says `bare`.
+        if (assembly->Build(*blueprint, guidBase, KCDC::Common::ToGlm(object.position), KCDC::Common::ToGlm(object.rotation), WorldObjectStandsBare(object.settings)) != SmartObject::SmartObjectAssembly::BuildResult::Built || assembly->Parts().empty()) {
             Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->warn("The map editor could not assemble '{}'", object.model);
             return false;
         }
@@ -295,7 +297,19 @@ namespace KCDC::Features::Prop {
         if (!NormalizeWorldObject(object->kind, model, clean, error)) {
             return false;
         }
-        object->settings = std::move(clean);
+        // A smart object's `bare` is the one setting its preview shows: with
+        // or without its furniture. The rest only reach the export.
+        const bool rebuild    = object->kind == PlacedKind::SmartObject && WorldObjectStandsBare(object->settings) != WorldObjectStandsBare(clean);
+        nlohmann::json before = std::exchange(object->settings, std::move(clean));
+        if (rebuild && !Rebuild(id)) {
+            // Put back as it stood, preview included when the game allows.
+            if (PlacedObject *failed = FindMutable(id)) {
+                failed->settings = std::move(before);
+                Rebuild(id);
+            }
+            error = "the game would not build its preview; the log has the reason";
+            return false;
+        }
         return true;
     }
 

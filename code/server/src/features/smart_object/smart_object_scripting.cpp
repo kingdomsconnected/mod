@@ -113,7 +113,7 @@ namespace KCDC::Scripting {
         void JS_Blueprints(const v8::FunctionCallbackInfo<v8::Value> &info) {
             nlohmann::json rows = nlohmann::json::array();
             for (const Shared::Game::SmartObjectBlueprint &blueprint : Shared::Game::g_SmartObjectBlueprints) {
-                rows.push_back({{"name", blueprint.name}, {"kind", Shared::Game::SmartObjectKindName(blueprint.kind)}, {"seats", SeatParts(blueprint).size()}});
+                rows.push_back({{"name", blueprint.name}, {"kind", Shared::Game::SmartObjectKindName(blueprint.kind)}, {"seats", SeatParts(blueprint).size()}, {"bare", Shared::Game::SmartObjectStandsBare(blueprint)}});
             }
             info.GetReturnValue().Set(JsonValue(info.GetIsolate(), rows));
         }
@@ -231,6 +231,11 @@ namespace KCDC::Scripting {
         return placed != nullptr ? placed->name : std::string();
     }
 
+    bool SmartObject::IsBare() const {
+        const auto *object = ResolveObject();
+        return object != nullptr && object->bare;
+    }
+
     std::string SmartObject::GetStationGuid() const {
         const auto *object = ResolveObject();
         const auto *layout = object != nullptr ? object->Blueprint() : nullptr;
@@ -282,6 +287,7 @@ namespace KCDC::Scripting {
             _class->property("blueprint", &SmartObject::GetBlueprint, v8pp::metadata::property_docs("string", "The blueprint it was placed from, as `SmartObject.blueprints()` lists it."));
             _class->property("kind", &SmartObject::GetKind, v8pp::metadata::property_docs("'seat' | 'bed' | 'dice' | 'alchemy' | 'smithing' | 'drying' | 'smoking'", "What it is for."));
             _class->property("name", &SmartObject::GetName, v8pp::metadata::property_docs("string", "The name it was placed with; empty for none."));
+            _class->property("bare", &SmartObject::IsBare, v8pp::metadata::property_docs("boolean", "Whether it was placed without its blueprint's furniture: only the place a body takes, or the station, and the prompts that offer it."));
             _class->property("stationId", &SmartObject::GetStationGuid,
                 v8pp::metadata::property_docs("string",
                     "The GUID of its station part as sixteen lowercase hex digits: the `id` `Dice.tables()` and `SmartObject.stations()` give it. `Crafting.stations()` lists an alchemy table or a smithy as `<level>:<stationId>`. Empty for a seat or a bed. It lasts only until the server stops."));
@@ -304,11 +310,14 @@ namespace KCDC::Scripting {
         definition.add_property("position", "Vector3 | number[]", "Where it stands: the prefab's own origin, as the level's copies of it stand.");
         definition.add_property("rotation", v8pp::metadata::type {"Quaternion | number[] | undefined", {}, true}, "Which way it faces: a Quaternion, {x, y, z, w} or [x, y, z, w]. None when omitted.");
         definition.add_property("name", v8pp::metadata::type {"string | undefined", {}, true}, "What a script finds it by, up to 64 bytes of UTF-8.");
+        definition.add_property("bare", v8pp::metadata::type {"boolean | undefined", {}, true},
+            "True to place it without the blueprint's furniture: only the place a body takes, or the station, and the prompts that offer it, for a prop of your own choosing to stand there instead. Only a blueprint `SmartObject.blueprints()` lists with `bare` takes it. False when omitted.");
 
         auto &blueprint = ServerCatalog().data_type("SmartObjectBlueprintInfo", "Something `SmartObject.spawn` can place.");
         blueprint.add_property("name", "string", "The name `SmartObject.spawn` takes: the game's prefab path under `Prefabs/`.");
         blueprint.add_property("kind", "'seat' | 'bed' | 'dice' | 'alchemy' | 'smithing' | 'drying' | 'smoking'", "What it is for.");
         blueprint.add_property("seats", "number", "How many bodies can sit or lie on it at once.");
+        blueprint.add_property("bare", "boolean", "Whether it can be placed `bare`: false for one whose furniture is one of its own entities, like a chair, or that has none.");
 
         auto &station = ServerCatalog().data_type("SmartObjectStation", "A station players can use: one the level places, or a placed smart object's.");
         station.add_property("id", "string", "Its GUID as sixteen lowercase hex digits, as `SmartObject.remove` takes it for one of the level's.");
@@ -330,8 +339,8 @@ namespace KCDC::Scripting {
                     v8pp::metadata::param("definition", "SmartObjectDefinition", false, "What to place and where, in the format of one entry of a World Builder map's `smartObjects` array."),
                     v8pp::metadata::param("virtualWorld", "number", true, "Optional virtual world whose players see it; the global one when omitted."),
                 },
-                "Places one of the game's interactive prefabs -- its furniture, solid, and the entities its interaction runs on -- for every player in the virtual world, built on each client under the same GUIDs, so sitting on it and working at it replicate as they do at the level's own. A placed dice table, crafting station, drying rack or smokehouse joins `Dice.tables()`, `Crafting.stations()` and the server's checks like the level's own. Kept in memory only: place it again on boot. The resource that places it owns it, so it goes when that resource stops. NPCs do not use it.",
-                "The smart object. Throws for an unknown blueprint or a transform that is not finite."));
+                "Places one of the game's interactive prefabs -- its furniture, solid, and the entities its interaction runs on -- for every player in the virtual world, built on each client under the same GUIDs, so sitting on it and working at it replicate as they do at the level's own. A placed dice table, crafting station, drying rack or smokehouse joins `Dice.tables()`, `Crafting.stations()` and the server's checks like the level's own. Kept in memory only: place it again on boot. The resource that places it owns it, so it goes when that resource stops. NPCs do not use it. A `bare` definition places the entities without the furniture, where a prop of your own stands.",
+                "The smart object. Throws for an unknown blueprint, a transform that is not finite, or `bare` on a blueprint that cannot stand bare."));
         cls.static_function("all", &JS_All,
             v8pp::metadata::docs("SmartObject[]", {v8pp::metadata::param("virtualWorld", "number", true, "Optional virtual world to list; omitted lists every one.")}, "Lists the smart objects scripts and World Builder exports placed.",
                 "One handle per placed object, in no particular order."));

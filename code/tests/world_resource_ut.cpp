@@ -49,6 +49,8 @@ namespace {
         map["lights"]       = nlohmann::json::array({{{"position", {4, 5, 6}}, {"color", {0.2, 0.4, 0.8}}, {"intensity", 3}, {"radius", 9}, {"castShadows", true}}});
         map["version"]      = 2;
         map["patrolRoutes"] = nlohmann::json::array({KCDC::Shared::Game::PatrolRouteToJson(route)});
+        // A bench's two places without the bench, for the prop the export puts there.
+        map["smartObjects"] = nlohmann::json::array({{{"blueprint", "Bench/bench_2places_low"}, {"position", {1, 2, 3}}, {"rotation", {0, 0, 0, 1}}, {"name", "bare-bench"}, {"bare", true}}});
         return map;
     }
 } // namespace
@@ -66,6 +68,7 @@ int RunWorldResourceSuite(bool emptyConfig) {
         second["world"]        = nlohmann::json::array();
         second["areas"]        = nlohmann::json::array();
         second["patrolRoutes"] = nlohmann::json::array();
+        second.erase("smartObjects");
         Write("other/first.world.json", second.dump());
         Write("server.json", R"({"mod":{"level":"world-resource-tests","required_dlc":[],"npcEnabled":false,"scoreboard":false,"world_resources":["first.world.json",{"name":"second","path":"other/first.world.json"}]}})");
         if (emptyConfig) {
@@ -235,6 +238,15 @@ int RunWorldResourceSuite(bool emptyConfig) {
         Write("conflict.world.json", conflict.dump());
         rejected(nlohmann::json::array({"first.world.json", "conflict.world.json"}), "Two resources edit the same level object");
         check(R"(if (Prop.all().length || Vfx.all().length || LevelEdit.all().length || Area.all("script").length) throw Error("failed load leaked contents");)");
+        auto mistypedBare                       = document;
+        mistypedBare["smartObjects"][0]["bare"] = "yes";
+        Write("mistyped-bare.world.json", mistypedBare.dump());
+        rejected(nlohmann::json::array({"mistyped-bare.world.json"}), "bare must be true or false");
+        auto bareChair                            = document;
+        bareChair["smartObjects"][0]["blueprint"] = "Chair/chair_low";
+        Write("bare-chair.world.json", bareChair.dump());
+        rejected(nlohmann::json::array({"bare-chair.world.json"}), "cannot stand bare");
+        check(R"(if (SmartObject.all().length) throw Error("failed load leaked a smart object");)");
 
         auto duplicateRoutes     = document;
         duplicateRoutes["world"] = nlohmann::json::array();
@@ -304,6 +316,47 @@ int RunWorldResourceSuite(bool emptyConfig) {
             first.props[0].destroy(); first.effects[0].destroy(); first.levelEdits[0].restore(); first.areas[0].destroy();
             if (!first.loaded || first.props.length || first.effects.length || first.levelEdits.length || first.areas.length) throw Error("dead members retained");
             if (second.props.length !== 1 || second.effects.length !== 1) throw Error("resource isolation");
+        )");
+
+        check(R"(
+            (() => {
+                const exported = first.smartObjects;
+                if (exported.length !== 1 || second.smartObjects.length || !(exported[0] instanceof SmartObject)) throw Error("bare smart object membership");
+                const seat = exported[0];
+                if (seat.bare !== true || seat.name !== "bare-bench" || seat.blueprint !== "Bench/bench_2places_low" || seat.seats.length !== 2) throw Error("bare smart object reads back");
+                const saved = seat.toJSON();
+                if (saved.bare !== true || saved.blueprint !== "Bench/bench_2places_low") throw Error("bare smart object definition");
+                try { seat.bare = false; } catch {}
+                if (seat.bare !== true) throw Error("bare is writable");
+
+                const furnished = SmartObject.spawn({blueprint: "Bench/bench_2places_low", position: [4, 5, 6]});
+                if (furnished.bare !== false || "bare" in furnished.toJSON()) throw Error("furnished by default");
+                const again = SmartObject.spawn(saved);
+                if (again.bare !== true || again.seats.length !== 2 || again.seats[0] === seat.seats[0]) throw Error("bare definition places again");
+                const explicit = SmartObject.spawn({blueprint: "Bed/bed_low", position: [7, 8, 9], bare: false});
+                if (explicit.bare !== false) throw Error("explicit furnished");
+                furnished.destroy(); again.destroy(); explicit.destroy();
+
+                const count = SmartObject.all().length;
+                for (const bare of [1, 0, "true", "", null, [], {}]) {
+                    let refused = false;
+                    try { SmartObject.spawn({blueprint: "Bench/bench_2places_low", position: [4, 5, 6], bare}); } catch (error) { refused = String(error.message).includes("bare must be true or false"); }
+                    if (!refused) throw Error("mistyped bare accepted: " + JSON.stringify(bare));
+                }
+                for (const blueprint of ["Chair/chair_low", "Chair/chair_high", "profession/butcher/butcher_smokeHouse"]) {
+                    let refused = false;
+                    try { SmartObject.spawn({blueprint, position: [4, 5, 6], bare: true}); } catch (error) { refused = String(error.message).includes("cannot stand bare"); }
+                    if (!refused) throw Error("bare accepted without furniture to leave out: " + blueprint);
+                    SmartObject.spawn({blueprint, position: [4, 5, 6]}).destroy();
+                }
+                if (SmartObject.all().length !== count) throw Error("refused bare placement left an object");
+
+                const rows = SmartObject.blueprints();
+                const row = name => rows.find(entry => entry.name === name);
+                if (row("Bench/bench_2places_low").bare !== true || row("Table/table_dice").bare !== true || row("Chair/chair_low").bare !== false || rows.some(entry => typeof entry.bare !== "boolean")) throw Error("blueprint bare column");
+                seat.destroy();
+                if (first.smartObjects.length) throw Error("destroyed bare smart object retained");
+            })();
         )");
 
         check(R"(

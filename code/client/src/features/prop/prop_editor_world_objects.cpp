@@ -173,6 +173,16 @@ namespace KCDC::Features::Prop {
         return true;
     }
 
+    bool WorldObjectStandsBare(const nlohmann::json &settings) {
+        const auto bare = settings.is_object() ? settings.find("bare") : settings.end();
+        return bare != settings.end() && bare->is_boolean() && bare->get<bool>();
+    }
+
+    bool WorldObjectTakesBare(PlacedKind kind, const std::string &model) {
+        const Shared::Game::SmartObjectBlueprint *blueprint = kind == PlacedKind::SmartObject ? Shared::Game::FindSmartObjectBlueprint(model) : nullptr;
+        return blueprint != nullptr && Shared::Game::SmartObjectStandsBare(*blueprint);
+    }
+
     nlohmann::json WorldObjectToJson(PlacedKind kind, const std::string &model, const nlohmann::json &settings, const SDK::Vec3 &position, const SDK::Quat &rotation) {
         return NamesOf(kind) != nullptr ? Entry(kind, model, settings, position, rotation) : nlohmann::json::object();
     }

@@ -136,16 +136,30 @@ and `placedKind` says which kind a row is:
 Pass the key as `model` to `wb_props_create`, with an optional `settings`
 object. A door takes `name`, `locked`, `lock` (`none`, `bolt`, `boltAndKey`
 or `key`), `lockpickable`, `lockDifficulty` (0 to 1) and `keyItem`. A smart
-object takes `name`. An item takes `name`, `amount`, `quality`, `health` and
-`condition`. These objects reject `scale` and `physics`, in creation and in
-`wb_objects_transform`, and `wb_prop_physics_set` refuses them: the server
-builds them at their own size. A field a kind does not take is ignored, and
-a value the server would refuse fails the call with the reason.
+object takes `name` and `bare`. An item takes `name`, `amount`, `quality`,
+`health` and `condition`. These objects reject `scale` and `physics`, in
+creation and in `wb_objects_transform`, and `wb_prop_physics_set` refuses
+them: the server builds them at their own size. A field a kind does not take
+is ignored, and a value the server would refuse fails the call with the
+reason.
+
+`bare: true` places a smart object without its blueprint's furniture: the
+seat, bed or station and the prompts that offer it stand alone, so a prop
+created beside it with `wb_props_create` is what players see and sit on.
+`wb_pose_anchors_query` still lists its poses, which is how to line it up
+with the prop. A blueprint whose furniture is one of its own entities
+(`Chair/chair_high`, `Chair/chair_low`) or that has none
+(`profession/butcher/butcher_smokeHouse`) refuses `bare: true`, with the
+reason; `false` or leaving it out is always accepted and is not stored.
 
 `wb_object_get` reports `kind` as `door`, `smartObject` or `item`, the
 canonical `model` (a door leaf by path, a blueprint by name, a shipped item
-by GUID), its `key`, `settings` and `built`. `wb_object_settings_update`
-replaces the settings as one undo step; omitted fields take their defaults.
+by GUID), its `key`, `settings` and `built`, and for a smart object
+`takesBare`: whether its blueprint accepts `bare`. A bare smart object's
+`bounds` is a small box around its parts, since it has no mesh to measure.
+`wb_object_settings_update` replaces the settings as one undo step; omitted
+fields take their defaults. Changing `bare` rebuilds the preview with or
+without the furniture, and undo and redo rebuild it back.
 `wb_document_get` pages them through the `doors`, `smartObjects` and `items`
 collections, which is how a project and an export store them.
 
