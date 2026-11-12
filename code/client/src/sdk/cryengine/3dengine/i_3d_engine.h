@@ -3,6 +3,7 @@
 #include "../../types.h"
 #include "../system/i_process.h"
 #include "i_material_manager.h"
+#include "i_merged_meshes_manager.h"
 #include "i_render_node.h"
 #include "i_stat_obj.h"
 #include "i_stat_inst_group.h"
@@ -330,7 +331,14 @@ namespace SDK {
         virtual void unk_fn0206() = 0;
         virtual void unk_fn0207() = 0;
         virtual void unk_fn0208() = 0;
-        virtual void unk_fn0209() = 0;
+
+        /**
+         * The owner of the terrain's merged-mesh sectors. `0x180E3C710`
+         * reads back a global, as `C_RespawnManager`'s destructor
+         * (0x182ADCCDC) does to take its stream listener off; null until
+         * the engine has made it.
+         */
+        virtual IMergedMeshesManager *GetIMergedMeshesManager() = 0; // +0x688
         virtual void unk_fn0210() = 0;
         virtual void unk_fn0211() = 0;
         virtual void unk_fn0212() = 0;

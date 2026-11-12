@@ -155,6 +155,7 @@ SET(KCDC_SDK_FILES
     src/sdk/cryengine/renderer/c_device_resource_layout.cpp
     src/sdk/wh/entitymodule/c_inventory_manager.cpp
     src/sdk/wh/framework/c_runtime_prefab_manager.cpp
+    src/sdk/cryengine/3dengine/c_obj_manager.cpp
     src/sdk/cryengine/3dengine/c_terrain.cpp
     src/sdk/cryengine/3dengine/i_particle_manager.cpp
     src/sdk/cryengine/3dengine/spawn_params.cpp
