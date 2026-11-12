@@ -318,6 +318,34 @@ int RunWorldResourceSuite(bool emptyConfig) {
             if (second.props.length !== 1 || second.effects.length !== 1) throw Error("resource isolation");
         )");
 
+        // A grass edit names no object: its box is the whole edit, and its key.
+        check(R"(
+            (() => {
+                const before = LevelEdit.all().length;
+                const box = {kind: "grass", at: [100, 200, 50], halfSize: [4, 3, 2], yaw: 30, hidden: true};
+                const grass = LevelEdit.apply(box);
+                if (grass.kind !== "grass" || !grass.hidden || grass.name !== "" || grass.moved || grass.model !== "") throw Error("grass edit");
+                if (LevelEdit.apply(box).id !== grass.id || LevelEdit.all().length !== before + 1) throw Error("grass edit doubled");
+                const other = LevelEdit.apply({...box, yaw: 31});
+                if (other.id === grass.id) throw Error("another box must be another edit");
+                if (grass.move(new Vector3(1, 2, 3)) !== false || grass.moved) throw Error("grass edit moved");
+                let swapRefused = false;
+                try { grass.model = "objects/manmade/common_decorations/corpses/bones_stash_shelf_a.cgf"; } catch { swapRefused = true; }
+                if (!swapRefused || grass.model !== "") throw Error("grass edit swapped for a mesh");
+                const json = grass.toJSON();
+                if (json.kind !== "grass" || json.at[0] !== 100 || json.halfSize[1] !== 3 || json.yaw !== 30 || json.hidden !== true || "name" in json) throw Error("grass toJSON");
+                for (const bad of [{kind: "grass", at: [1, 2, 3]}, {kind: "grass", at: [1, 2, 3], halfSize: [1, 0, 1]}, {kind: "grass", at: [1, 2, 3], halfSize: [1, 1, 200]}, {kind: "grass", halfSize: [1, 1, 1]}, {kind: "lawn", at: [1, 2, 3], halfSize: [1, 1, 1]}]) {
+                    let refused = false;
+                    try { LevelEdit.apply(bad); } catch { refused = true; }
+                    if (!refused) throw Error("bad grass edit accepted: " + JSON.stringify(bad));
+                }
+                grass.hidden = false;
+                if (grass.hidden || !grass.exists) throw Error("grass given back while the edit stays");
+                grass.restore(); other.restore();
+                if (LevelEdit.all().length !== before) throw Error("grass edits left behind");
+            })();
+        )");
+
         check(R"(
             (() => {
                 const exported = first.smartObjects;

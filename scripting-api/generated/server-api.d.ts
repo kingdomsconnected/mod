@@ -4667,9 +4667,9 @@ declare global {
   /** */
   interface LevelEditDefinition {
     /**
-     * What the object is; a brush when omitted. A brush has no identity of its own, so it is found by its mesh and where the level put it; a level entity by its EntityGuid.
+     * What the object is; a brush when omitted. A brush has no identity of its own, so it is found by its mesh and where the level put it; a level entity by its EntityGuid. Grass is no object: the edit is an upright box, `at`, `halfSize` and `yaw`, and with `hidden` every plant of the terrain's merged vegetation rooted in it goes -- tall grass, flowers, ferns -- except the ones a player can gather.
      */
-    kind?: 'brush' | 'entity' | undefined;
+    kind?: 'brush' | 'entity' | 'grass' | undefined;
 
     /**
      * A brush's mesh path, `objects/...cgf`, as the World Builder shows it; required for a brush. An entity's name, kept for reading only.
@@ -4687,12 +4687,22 @@ declare global {
     class?: string | undefined;
 
     /**
-     * Where the level put the object: its pivot, matched within 5 cm. A brush's key, with its mesh.
+     * Where the level put the object: its pivot, matched within 5 cm. A brush's key, with its mesh. For grass, the centre of the box.
      */
     at: Vector3 | number[];
 
     /**
-     * Whether it is taken out of the world: not drawn and not solid.
+     * Grass only, and required for it: half the box along its own two ground axes and up, each from 0.01 to 128 metres. Make it tall enough to hold the ground the plants stand on.
+     */
+    halfSize?: Vector3 | number[] | undefined;
+
+    /**
+     * Grass only: the box's turn about the vertical in degrees, counter-clockwise seen from above. None when omitted.
+     */
+    yaw?: number | undefined;
+
+    /**
+     * Whether it is taken out of the world: not drawn and not solid. A grass edit clears its box only while this is set.
      */
     hidden?: boolean | undefined;
 
@@ -4718,7 +4728,7 @@ declare global {
   }
 
   /**
-   * One change the server makes, for every player, to an object the level itself placed -- a brush, a tree or a level entity taken out of the world, moved, swapped for another mesh, or a mix of those. It is what a World Builder map's `world` array carries. `WorldRayHit.levelObject` names the object a trace met in the form `apply` takes.
+   * One change the server makes, for every player, to an object the level itself placed -- a brush, a tree or a level entity taken out of the world, moved, swapped for another mesh, or a mix of those -- or to the grass: the tall grass, flowers and ferns the level bakes into its terrain are not objects, and a `grass` edit takes out every one of them rooted in a box. It is what a World Builder map's `world` array carries. `WorldRayHit.levelObject` names the object a trace met in the form `apply` takes.
    */
   class LevelEdit {
     /**
@@ -4738,12 +4748,12 @@ declare global {
     readonly exists: boolean;
 
     /**
-     * Whether the object is a brush, found by its mesh and where the level put it, or a level entity, found by its EntityGuid.
+     * Whether the object is a brush, found by its mesh and where the level put it, a level entity, found by its EntityGuid, or a box of the terrain's grass.
      */
-    readonly kind: 'brush' | 'entity';
+    readonly kind: 'brush' | 'entity' | 'grass';
 
     /**
-     * A brush's mesh path, or the name the level gives the entity.
+     * A brush's mesh path, or the name the level gives the entity. Empty for grass.
      */
     readonly name: string;
 
@@ -4758,7 +4768,7 @@ declare global {
     readonly virtualWorld: number;
 
     /**
-     * Whether the object is taken out of the world: not drawn and not solid. Assignment takes it out or puts it back for every player, keeping any move.
+     * Whether the object is taken out of the world: not drawn and not solid. Assignment takes it out or puts it back for every player, keeping any move. For grass, whether the plants in the box are taken out.
      */
     hidden: boolean;
 
@@ -4768,7 +4778,7 @@ declare global {
     readonly moved: boolean;
 
     /**
-     * The mesh standing in the object's place, or empty. Assigning a prop catalog path or a mesh this server streams swaps the object for it on every player: the object goes, collision included, and the mesh stands where it stood -- or where `move` put it -- as solid static scenery. A felled tree leaves its stump this way. Assigning an empty string gives the object back. Throws for any other path.
+     * The mesh standing in the object's place, or empty. Assigning a prop catalog path or a mesh this server streams swaps the object for it on every player: the object goes, collision included, and the mesh stands where it stood -- or where `move` put it -- as solid static scenery. A felled tree leaves its stump this way. Assigning an empty string gives the object back. Throws for any other path, and for a grass edit.
      */
     model: string;
 
@@ -4783,7 +4793,7 @@ declare global {
      * @param position Where the object stands instead.
      * @param rotation Its orientation: a Quaternion, or Euler angles in degrees. Left out, it keeps the last move's.
      * @param scale A uniform scale or one per axis, from 0.01 to 100. Left out, it keeps the last move's.
-     * @returns False for a gone edit or a transform that is not finite.
+     * @returns False for a gone edit, a transform that is not finite, or a grass edit, whose box is fixed when it is applied.
      */
     move(position: Vector3, rotation?: Quaternion | Vector3, scale?: number | Vector3): boolean;
 
@@ -4807,7 +4817,7 @@ declare global {
      * Takes an object the level placed out of the world, moves it, or swaps it for another mesh, for every player in the virtual world -- whenever they join, and however far away they are. Collision goes with it. An edit already made to the same object in that world is restated rather than doubled, so applying one twice changes nothing. Kept in memory only: apply it again on boot. A `WorldRayHit.levelObject` is a definition already: spread it and add what to do, as in `LevelEdit.apply({ ...hit.levelObject, model: stump })`.
      * @param definition The object and what to do to it, in the format of one entry of a World Builder map's `world` array.
      * @param virtualWorld Optional virtual world whose players see it; the global one when omitted.
-     * @returns The edit. Throws for a definition no client could find the object by, or a `model` no client could load.
+     * @returns The edit. Throws for a definition no client could find the object by, a `model` no client could load, or a grass box that is not finite and within its limits.
      */
     static apply(definition: LevelEditDefinition, virtualWorld?: number): LevelEdit;
 

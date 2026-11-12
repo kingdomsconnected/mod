@@ -13,7 +13,8 @@ namespace KCDC::Shared::Entities {
      * One change the server makes to an object the level placed: a brush or
      * a level entity taken out of the world, moved, swapped for another mesh,
      * or a mix of those -- what a World Builder map's `world` array carries,
-     * pushed to every player instead of loaded by hand on each.
+     * pushed to every player instead of loaded by hand on each. A grass edit
+     * names no object: its box of the terrain's merged vegetation is cleared.
      *
      * A replicated entity for the reason a blip is one: whoever joins later
      * has to get it. It is never culled by distance, since the object it
@@ -43,6 +44,10 @@ namespace KCDC::Shared::Entities {
         /** Where the level put the object; `position` is only the entity's own bookkeeping. */
         glm::vec3 at {0.0F};
 
+        /** Grass only: the box around `at`; see `LevelEditDefinition::halfSize`. */
+        glm::vec3 halfSize {0.0F};
+        float yawDegrees = 0.0F;
+
         bool hidden = false;
 
         /** The mesh standing in the object's place, or empty; see `LevelEditDefinition::model`. */
@@ -57,7 +62,7 @@ namespace KCDC::Shared::Entities {
             // Seeded from the current value, for the reason PropEntity gives.
             std::uint8_t wireKind = static_cast<std::uint8_t>(kind);
             fields.Field(wireKind);
-            kind = wireKind == static_cast<std::uint8_t>(Shared::Game::LevelEditKind::Entity) ? Shared::Game::LevelEditKind::Entity : Shared::Game::LevelEditKind::Brush;
+            kind = wireKind == static_cast<std::uint8_t>(Shared::Game::LevelEditKind::Entity) ? Shared::Game::LevelEditKind::Entity : wireKind == static_cast<std::uint8_t>(Shared::Game::LevelEditKind::Grass) ? Shared::Game::LevelEditKind::Grass : Shared::Game::LevelEditKind::Brush;
 
             fields.Field(guid);
 
@@ -72,6 +77,12 @@ namespace KCDC::Shared::Entities {
             fields.Field(at.x);
             fields.Field(at.y);
             fields.Field(at.z);
+
+            // The rest of a grass edit's key: the box is the whole edit.
+            fields.Field(halfSize.x);
+            fields.Field(halfSize.y);
+            fields.Field(halfSize.z);
+            fields.Field(yawDegrees);
 
             SerializeEdit(fields);
         }
@@ -90,7 +101,9 @@ namespace KCDC::Shared::Entities {
             edit.guid     = guid;
             edit.name     = name;
             edit.at       = at;
-            edit.hidden   = hidden;
+            edit.halfSize   = halfSize;
+            edit.yawDegrees = yawDegrees;
+            edit.hidden     = hidden;
             edit.model    = model;
             edit.moved    = moved;
             edit.position = movedPosition;

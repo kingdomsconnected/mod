@@ -43,6 +43,7 @@
 #include "item_stats_ut.h"
 #include "join_deadlines_ut.h"
 #include "locomotion_bands_ut.h"
+#include "grass_clearing_ut.h"
 #include "level_object_ut.h"
 #include "light_api_ut.h"
 #include "missile_ut.h"
@@ -536,6 +537,7 @@ int main(int argc, char **argv) {
     UNIT_MODULE(head_visibility);
     UNIT_MODULE(locomotion_bands);
     UNIT_MODULE(door_protocol);
+    UNIT_MODULE(grass_clearing);
     UNIT_MODULE(level_objects);
     UNIT_MODULE(world_objects);
     UNIT_MODULE(prop_physics);
