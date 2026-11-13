@@ -9,12 +9,18 @@ A KCD2 mod is `<modid>/mod.manifest` beside `data/*.pak` and
   materials, textures, clips' databases, sounds at their stock paths, and the
   table patches `libs/tables/.../<table>__<id>.xml`;
 - `localization/<language>/`: the string patches of each `<Language>_xml.pak`;
+- `level/levels/<level>/`: the files of each `data/levels/<level>/*.pak`, later
+  paks winning as they do for an installed mod;
+- `script/scripts/...`: the mod's Lua, which the client runs in a restricted
+  environment;
+- `stream/sounds/kcdc/<resource>/atl/`: its audio controls, from `libs/gameaudio/`,
+  parsed for the level like any streamed controls;
 - `package.json`, naming the mod.
 
-Everything else is left out and listed: Lua (`scripts/`), quests, Storm, AI
-trees, UI movies, level edits, `mod.cfg`. A server never runs a mod's code, and
-both ends refuse a pak carrying any of it, so the tool drops it here rather than
-have the server refuse the whole lane. The rules mirror
+Everything else is left out and listed: quests, Storm, AI trees, UI movies,
+`mod.cfg`, and prefabs. An AI tree can hold `ExecuteLua` that runs outside the
+restricted environment, and Storm merges only at boot. Both ends refuse a pak carrying any of it, so the tool drops it here
+rather than have the server refuse the whole lane. The rules mirror
 `code/shared/streamed_assets/streamed_asset_policy.cpp`; the server checks every
 entry again when it builds the paks.
 """
@@ -33,6 +39,36 @@ REPLACE_DENIED_ROOTS = {"scripts", "libs", "engine", "shaders", "levels", "local
 SPLIT_TEXTURE_CHUNK = re.compile(r"\.dds\.[1-9][0-9]?a?")
 PATCH_FILE = re.compile(r"[a-z0-9_-]+__[a-z0-9_]+\.xml")
 LANGUAGE_PAK = re.compile(r"([a-z]+)_xml\.pak")
+AUDIO_CONTROLS = re.compile(r"libs/gameaudio/([a-z0-9_-]+\.xml)")
+LEVEL_PAK = re.compile(r"data/levels/([a-z0-9_]+)/[^/]+\.pak")
+LEVEL_FOLDERS = {"terrain", "physics", "recast", "hlods", "cestool", "brush", "layers"}
+LEVEL_EXTENSIONS = (".dat", ".lst", ".ctc", ".xml", ".cgf", ".cgfm", ".hdr", ".nav")
+LEVEL_ENTITY_FILE = re.compile(r"(objects|mission)_[^/]*\.xml")
+SCRIPT_COMMAND = re.compile(rb"scriptcommand(?!=\"\")", re.IGNORECASE)
+ESCAPED_CLASS = re.compile(rb"class=\"[^\"]*&", re.IGNORECASE)
+
+
+def level_reason(path, data):
+    """Why the level lane would refuse `path` relative to its level folder, or None when it ships."""
+    normalized = path.replace("\\", "/").lower()
+    segments = normalized.split("/")
+    name = segments[-1]
+    if re.search(r"[^a-z0-9_./-]", normalized) or any(not segment or segment in (".", "..") for segment in segments):
+        return "a level path outside [A-Za-z0-9_./-], or an empty or relative segment"
+    if any("." in segment for segment in segments[:-1]):
+        return "a dot in a level folder name"
+    if len(segments) == 1:
+        allowed = name == "occluder.ocm" or re.fullmatch(r"whdata_[0-9]+", name) or LEVEL_ENTITY_FILE.fullmatch(name)
+    elif normalized == "tables/ai/scheduler.xml":
+        allowed = True
+    else:
+        allowed = segments[0] in LEVEL_FOLDERS and name[name.find("."):] in LEVEL_EXTENSIONS and "." in name
+    if not allowed:
+        return f"{name} is not a file a level edit may replace"
+    if (len(segments) == 1 and LEVEL_ENTITY_FILE.fullmatch(name)) or (segments[0] == "layers" and name.endswith(".xml")):
+        if SCRIPT_COMMAND.search(data) or ESCAPED_CLASS.search(data):
+            return f"{name} runs a script"
+    return None
 
 
 def replace_reason(path):
@@ -45,6 +81,8 @@ def replace_reason(path):
         return "no folder, or an empty or relative segment"
     if any("." in segment for segment in segments[:-1]):
         return "a dot in a folder name"
+    if re.fullmatch(r"sounds/fmod/build/pc/[^/]+\.bank", normalized):
+        return None
     if normalized.startswith("libs/tables/"):
         return None if PATCH_FILE.fullmatch(segments[-1]) else "a table can only be patched (<table>__<id>.xml)"
     if segments[0] in REPLACE_DENIED_ROOTS:
@@ -58,6 +96,24 @@ def replace_reason(path):
     if extension in ASSET_EXTENSIONS or SPLIT_TEXTURE_CHUNK.fullmatch(extension):
         return None
     return f"{extension or 'no extension'} is not an asset the engine loads by path"
+
+
+def is_script(path):
+    normalized = path.replace("\\", "/").lower()
+    return normalized.startswith("scripts/") and normalized.endswith(".lua")
+
+
+def script_reason(path, data):
+    """Why the script lane would refuse `path`, or None when it ships."""
+    normalized = path.replace("\\", "/").lower()
+    segments = normalized.split("/")
+    if re.search(r"[^a-z0-9_./-]", normalized) or any(not segment or segment in (".", "..") for segment in segments):
+        return "a script path outside [A-Za-z0-9_./-], or an empty or relative segment"
+    if len(segments) < 3 or any("." in segment for segment in segments[:-1]):
+        return "a script outside scripts/.../<name>.lua"
+    if data.startswith(b"\x1b") or b"\0" in data:
+        return "a precompiled script"
+    return None
 
 
 def mod_files(source):
@@ -97,10 +153,43 @@ def main():
             manifest = data.decode("utf-8", "replace")
             continue
         language = LANGUAGE_PAK.fullmatch(PurePosixPath(lowered).name) if lowered.startswith("localization/") else None
-        if lowered.startswith("data/") and lowered.endswith(".pak"):
+        level = LEVEL_PAK.fullmatch(lowered)
+        if level:
             with zipfile.ZipFile(io.BytesIO(data)) as pak:
                 for entry in pak.infolist():
                     if entry.is_dir():
+                        continue
+                    contents = pak.read(entry)
+                    reason = level_reason(entry.filename, contents)
+                    if reason:
+                        dropped[reason] += 1
+                        continue
+                    target = args.resource / "level" / "levels" / level.group(1) / entry.filename.replace("\\", "/").lower()
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(contents)
+                    shipped["level"] += 1
+        elif lowered.startswith("data/") and lowered.endswith(".pak"):
+            with zipfile.ZipFile(io.BytesIO(data)) as pak:
+                for entry in pak.infolist():
+                    if entry.is_dir():
+                        continue
+                    audio = AUDIO_CONTROLS.fullmatch(entry.filename.replace("\\", "/").lower())
+                    if audio:
+                        target = args.resource / "stream" / "sounds" / "kcdc" / name / "atl" / audio.group(1)
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(pak.read(entry))
+                        shipped["stream"] += 1
+                        continue
+                    if is_script(entry.filename):
+                        contents = pak.read(entry)
+                        reason = script_reason(entry.filename, contents)
+                        if reason:
+                            dropped[reason] += 1
+                            continue
+                        target = args.resource / "script" / entry.filename.replace("\\", "/").lower()
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(contents)
+                        shipped["script"] += 1
                         continue
                     reason = replace_reason(entry.filename)
                     if reason:
@@ -138,7 +227,7 @@ def main():
     args.resource.mkdir(parents=True, exist_ok=True)
     (args.resource / "package.json").write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
 
-    print(f"{name}: {shipped['replace']} replace file(s), {shipped['localization']} string patch(es)")
+    print(f"{name}: {shipped['replace']} replace file(s), {shipped['localization']} string patch(es), {shipped['level']} level file(s), {shipped['script']} script(s), {shipped['stream']} audio control file(s)")
     for reason, count in dropped.most_common():
         print(f"  left out {count}: {reason}")
 

@@ -23,9 +23,19 @@ namespace KCDC::Shared::StreamedAssets {
     // `localization` carries a KCD2 mod's string patches, `<language>/<file>__<id>.xml`, mounted
     // under the game's localization folder and merged into the string table like the game merges an
     // installed mod's.
+    //
+    // `level` carries a KCD2 mod's level edits, `levels/<level>/...`: terrain, navigation, physics,
+    // far-view meshes and the level's object list, each file replacing the game's whole, as an
+    // installed mod's level paks do. The level reads them as it loads, so a pak applies from the
+    // next level load only.
     inline constexpr char kLaneStream[]       = "stream";
     inline constexpr char kLaneReplace[]      = "replace";
     inline constexpr char kLaneLocalization[] = "localization";
+    inline constexpr char kLaneLevel[]        = "level";
+    // `script` carries a KCD2 mod's Lua, `scripts/.../<name>.lua`. It is never mounted, so the game
+    // cannot find these files on its own: the client reads them out of the pak and runs them in a
+    // restricted environment (ModScriptHost).
+    inline constexpr char kLaneScript[] = "script";
 
     // The folder segment that sandboxes the stream lane.
     inline constexpr std::string_view kNamespaceSegment = "kcdc";
@@ -52,6 +62,22 @@ namespace KCDC::Shared::StreamedAssets {
 
         /** Already-compressed and streamed kinds are stored; the rest is deflated. */
         bool PrefersStore(std::string_view normalized) const override;
+
+        /** Leaves out a level's entity XML that would run a script, and precompiled Lua; every other entry ships. */
+        bool ShouldShip(std::string_view lane, std::string_view resource, std::string_view normalized, const std::string &sourceFile, std::string &reason) const override;
+
+        /** A level file that places entities: `levels/<level>/objects_*.xml`, `mission_*.xml` or `layers/*.xml`. */
+        static bool IsLevelEntityXml(std::string_view normalized);
+
+        /**
+         * Whether a level's entity XML would hand the game a script to run. A trigger's or a flow
+         * node's `ScriptCommand` is compiled and run when it fires, in the game's own Lua state, so
+         * the check fails closed: anything but an empty value counts.
+         */
+        static bool LevelXmlRunsScript(std::string_view xml);
+
+        /** A mod's entry script, `scripts/mods/<name>.lua`: the file the game itself would start a mod from. */
+        static bool IsModEntryScript(std::string_view normalized);
 
         static bool IsAnimationClip(std::string_view normalized);
         static bool IsAnimationDatabase(std::string_view normalized);

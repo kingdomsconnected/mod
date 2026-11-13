@@ -38,6 +38,7 @@ namespace KCDC::Core::States {
         // Lets go of the readiness hold: a level the game finished loading
         // completes the way the game completes any load.
         gApplication->CancelSessionLoading();
+        gApplication->GetStreamedAssetService().EndSession();
         // Shown by MainMenu, over the transport's reason: refusing a join
         // closes the connection, which then reports itself as the cause.
         if (const char *error = gApplication->GetSessionLoadContext().error) {

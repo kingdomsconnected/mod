@@ -5,6 +5,9 @@
 #include <utils/states/machine.h>
 
 #include "core/application.h"
+#if defined(KCDC_AGENT_TESTING)
+#include "core/boot/agent_testing.h"
+#endif
 #include "core/crash_context.h"
 #include "core/dlc.h"
 #include "core/obfuscation.h"
@@ -169,8 +172,31 @@ namespace KCDC::Core::States {
 
                 if (status == KCDC::Core::StreamedAssets::StreamedAssetService::JoinStatus::AwaitingConsent) {
                     gApplication->ShowDownload(Core::DownloadProgress {0, gApplication->GetAssetConsentBytes(), true, 0, false, -1});
-                    if (frontend.ConsumeDownloadConsent()) {
+                    bool accepted = frontend.ConsumeDownloadConsent();
+#if defined(KCDC_AGENT_TESTING)
+                    // An agent-led test has nobody at the screen to accept the size.
+                    if (!accepted) {
+                        Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Agent testing: accepted the asset download without asking");
+                        accepted = true;
+                    }
+#endif
+                    if (accepted) {
                         gApplication->GrantAssetConsent();
+                    }
+                    return false;
+                }
+                if (status == KCDC::Core::StreamedAssets::StreamedAssetService::JoinStatus::AwaitingScriptApproval) {
+                    frontend.ShowScriptApproval(assets.GetUnapprovedScripts());
+                    gApplication->ShowMultiplayerFrontend();
+                    bool accepted = frontend.ConsumeScriptApproval();
+#if defined(KCDC_AGENT_TESTING)
+                    if (!accepted && Boot::AgentTesting::Get().AutoAcceptScripts()) {
+                        Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Agent testing: accepted the script card without asking");
+                        accepted = true;
+                    }
+#endif
+                    if (accepted) {
+                        assets.ApproveScripts();
                     }
                     return false;
                 }
@@ -220,6 +246,7 @@ namespace KCDC::Core::States {
         // leave a download running.
         gApplication->EndAdmissionWait();
         gApplication->GetMultiplayerFrontend().ShowDownload(std::nullopt);
+        gApplication->GetMultiplayerFrontend().ShowScriptApproval({});
         return SessionStartupState::OnExit(machine);
     }
 } // namespace KCDC::Core::States

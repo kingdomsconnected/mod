@@ -39,12 +39,15 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <filesystem>
 #include <map>
 #include <string>
 
 namespace KCDC::Core::StreamedAssets {
     namespace {
-        // CryPak flags: FLAGS_PATH_REAL, and FLAGS_OVERRIDE_PAK for the replace lane.
+        // CryPak flags: FLAGS_PATH_REAL, and FLAGS_OVERRIDE_PAK for the lanes that replace the game's
+        // files, as the game mounts an installed mod's paks.
         constexpr unsigned int kMountFlags         = 0x10000u;
         constexpr unsigned int kOverrideMountFlags = 0x10400u;
 
@@ -115,9 +118,110 @@ namespace KCDC::Core::StreamedAssets {
     void StreamedAssetService::BeginJoin() {
         EnsureListening();
         _error.clear();
-        _joined   = false;
+        _joined      = false;
+        _joinMounted = false;
+        _applying    = false;
+        _pending.clear();
+        _scripts.Stop();
+        _scripts.ClearStaged();
+    }
+
+    void StreamedAssetService::BeginLocalMods(const std::string &folder, std::vector<std::string> resources) {
+        EnsureListening();
+        _error.clear();
+        _localWarnings.clear();
+        if (_localBuild.valid()) {
+            _localBuild.wait();
+        }
+        // Inside the servers folder, so an approval beside it holds for these too.
+        const std::filesystem::path cache = std::filesystem::u8path(KCDC::Core::gGlobals.projectPath) / "cache" / "servers" / "local";
+        _localBuild                       = std::async(std::launch::async, [root = std::filesystem::u8path(folder), resources = std::move(resources), cache]() {
+            LocalBuild build;
+            std::string listError;
+            const std::vector<KCDC::Shared::StreamedAssets::LocalMod> found = resources.empty() ? std::vector<KCDC::Shared::StreamedAssets::LocalMod> {} : KCDC::Shared::StreamedAssets::ListLocalMods(root, listError);
+            for (const std::string &resource : resources) {
+                const bool exists = std::any_of(found.begin(), found.end(), [&resource](const KCDC::Shared::StreamedAssets::LocalMod &mod) { return mod.resource == resource; });
+                if (!exists) {
+                    build.warnings.push_back(resource + " is not in the resources folder and was not loaded.");
+                    continue;
+                }
+                std::vector<KCDC::Shared::StreamedAssets::LocalModPak> paks;
+                if (!KCDC::Shared::StreamedAssets::BuildLocalMod(root, resource, cache, paks, build.error)) {
+                    return build;
+                }
+                build.resources.push_back(resource);
+                for (KCDC::Shared::StreamedAssets::LocalModPak &pak : paks) {
+                    build.paks.emplace_back(resource, std::move(pak));
+                }
+            }
+            return build;
+        });
+    }
+
+    StreamedAssetService::JoinStatus StreamedAssetService::PollLocalMods() {
+        if (!_localBuild.valid() || _localBuild.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
+            return JoinStatus::Downloading;
+        }
+        LocalBuild build = _localBuild.get();
+        _localWarnings   = std::move(build.warnings);
+        for (const std::string &warning : _localWarnings) {
+            Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->warn("{}", warning);
+        }
+        if (!build.error.empty()) {
+            Fail(build.error);
+            return JoinStatus::Failed;
+        }
+
+        _scripts.Stop();
+        _scripts.ClearStaged();
         _applying = false;
         _pending.clear();
+        _clips.clear();
+        std::unordered_set<std::string> paths;
+        for (const auto &[resource, built] : build.paks) {
+            Framework::Integrations::Client::ResourceAssetPak pak;
+            pak.resource    = resource;
+            pak.info.lane   = built.lane;
+            pak.info.sha256 = built.sha256;
+            pak.info.size   = built.size;
+            pak.path        = built.path;
+            if (!Mount(pak, true)) {
+                return JoinStatus::Failed;
+            }
+            paths.insert(built.path);
+        }
+        _current     = std::move(paths);
+        _localMods   = std::move(build.resources);
+        _joinMounted = true;
+        _joined      = true;
+        RebuildClipDatabase();
+        SyncModData(false);
+        // Ticking a mod in the editor is the owner's answer; its risks are listed beside the box.
+        _scripts.ApproveStaged();
+        _scripts.Start();
+        Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Local client mods in use: {}", _localMods.size());
+        return JoinStatus::Ready;
+    }
+
+    void StreamedAssetService::EndSession() {
+        _scripts.Stop();
+        _scripts.ClearStaged();
+        _localMods.clear();
+        // The level stays up behind the menu. Whatever loads next, a session or the offline World
+        // Builder, replaces it, and that edge retires everything this session mounted.
+        _current.clear();
+        _joined      = false;
+        _joinMounted = false;
+        _applying    = false;
+        _pending.clear();
+    }
+
+    std::vector<std::string> StreamedAssetService::GetUnapprovedScripts() const {
+        return _scripts.DescribeUnapproved();
+    }
+
+    void StreamedAssetService::ApproveScripts() {
+        _scripts.ApproveStaged();
     }
 
     std::unordered_set<std::string> StreamedAssetService::CurrentPaths() const {
@@ -150,19 +254,26 @@ namespace KCDC::Core::StreamedAssets {
 
         // A server that ships nothing still settles the set: whatever the last one shipped retires at
         // the level edge.
-        _clips.clear();
-        for (const Framework::Integrations::Client::ResourceAssetPak &pak : paks) {
-            if (!Mount(pak, true)) {
-                return JoinStatus::Failed;
+        if (!_joinMounted) {
+            _clips.clear();
+            for (const Framework::Integrations::Client::ResourceAssetPak &pak : paks) {
+                if (!Mount(pak, true)) {
+                    return JoinStatus::Failed;
+                }
+            }
+            _current     = CurrentPaths();
+            _joinMounted = true;
+            RebuildClipDatabase();
+            SyncModData(false);
+            if (!paks.empty()) {
+                Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Asset paks in use: {}", paks.size());
             }
         }
-        _current = CurrentPaths();
-        _joined  = true;
-        RebuildClipDatabase();
-        SyncModData(false);
-        if (!paks.empty()) {
-            Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->info("Asset paks in use: {}", paks.size());
+        if (!_scripts.DescribeUnapproved().empty()) {
+            return JoinStatus::AwaitingScriptApproval;
         }
+        _scripts.Start();
+        _joined = true;
         return JoinStatus::Ready;
     }
 
@@ -231,10 +342,54 @@ namespace KCDC::Core::StreamedAssets {
             return false;
         }
 
+        // Scripts are never mounted, so the game cannot find them by itself: they run in the
+        // environment the host gives them, from the text read here.
+        if (pak.info.lane == KCDC::Shared::StreamedAssets::kLaneScript) {
+            if (!joining) {
+                Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->warn("'{}' changed its scripts mid-session; they run from the next join", pak.resource);
+                return true;
+            }
+            std::vector<KCDC::Core::StreamedAssets::ModScriptHost::Source> sources;
+            for (const Framework::Utils::StreamedAssets::PakEntry &entry : entries) {
+                std::string text = ReadEntry(path, entry.path);
+                if (text.empty() && entry.size != 0) {
+                    Fail("A streamed pak from '" + pak.resource + "' could not be read");
+                    return false;
+                }
+                sources.emplace_back(entry.path, std::move(text));
+            }
+            std::string refused;
+            if (!_scripts.Stage(pak.resource, path, std::move(sources), refused)) {
+                Fail(refused);
+                return false;
+            }
+            return true;
+        }
+
         SDK::ICryPak *cryPak        = SDK::ICryPak::GetInstance();
         const auto existing         = _mounted.find(path);
         const bool replaceLane      = pak.info.lane == KCDC::Shared::StreamedAssets::kLaneReplace;
         const bool localizationLane = pak.info.lane == KCDC::Shared::StreamedAssets::kLaneLocalization;
+        const bool levelLane        = pak.info.lane == KCDC::Shared::StreamedAssets::kLaneLevel;
+        if (levelLane) {
+            // The level already read these files; swapping them under it would mix two worlds.
+            if (!joining) {
+                Framework::Logging::GetLogger(FRAMEWORK_INNER_CLIENT)->warn("'{}' changed its level edits mid-session; they apply from the next join", pak.resource);
+                return true;
+            }
+            if (existing == _mounted.end()) {
+                for (const Framework::Utils::StreamedAssets::PakEntry &entry : entries) {
+                    if (!KCDC::Shared::StreamedAssets::Policy::IsLevelEntityXml(entry.path)) {
+                        continue;
+                    }
+                    const std::string xml = ReadEntry(path, entry.path);
+                    if (xml.empty() || KCDC::Shared::StreamedAssets::Policy::LevelXmlRunsScript(xml)) {
+                        Fail("A streamed pak from '" + pak.resource + "' was refused: its level data runs a script or cannot be read");
+                        return false;
+                    }
+                }
+            }
+        }
         if (existing != _mounted.end()) {
             if (!existing->second.accessible && !cryPak->SetPackAccessible(true, path.c_str(), kMountFlags)) {
                 Fail("Cannot re-enable a streamed pak from '" + pak.resource + "'");
@@ -246,7 +401,7 @@ namespace KCDC::Core::StreamedAssets {
             // String patches bind where the game binds an installed mod's localization pak; both
             // override lanes win over whatever the game mounted at the same paths.
             const char *bindRoot = localizationLane ? kLocalizationRoot : cryPak->GetGameFolder();
-            if (!cryPak->MountArchive(bindRoot, path.c_str(), replaceLane || localizationLane ? kOverrideMountFlags : kMountFlags)) {
+            if (!cryPak->MountArchive(bindRoot, path.c_str(), replaceLane || localizationLane || levelLane ? kOverrideMountFlags : kMountFlags)) {
                 Fail("Cannot mount a streamed pak from '" + pak.resource + "'");
                 return false;
             }

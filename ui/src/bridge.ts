@@ -8,6 +8,7 @@ const eventSounds: Partial<Record<string, UISound>> = {
     "menu.quit": "confirm",
     "menu.leave": "cancel",
     "menu.acceptDownload": "confirm",
+    "menu.acceptScripts": "confirm",
     "menu.openUrl": "confirm",
 };
 
@@ -15,7 +16,7 @@ export function playUISound(sound: UISound): void {
     window.callEvent?.(`ui.${sound}`, null);
 }
 
-export function emit(event: "menu.quit" | "menu.ready" | "menu.leave" | "menu.acceptDownload", payload?: never): void;
+export function emit(event: "menu.quit" | "menu.ready" | "menu.leave" | "menu.acceptDownload" | "menu.acceptScripts", payload?: never): void;
 export function emit(event: "menu.connect", payload: ConnectPayload): void;
 export function emit(event: "menu.worldBuilder", payload: WorldBuilderPayload): void;
 export function emit(event: "menu.openUrl", payload: OpenUrlPayload): void;

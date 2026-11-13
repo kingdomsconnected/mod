@@ -1,3 +1,5 @@
+#include <utils/streamed_assets/policy.h>
+
 #include "prop_editor_document.h"
 
 #include "core/ui/native_ui/native_ui_assets.h"
@@ -438,6 +440,9 @@ namespace KCDC::Features::Prop {
             {"scene", MapDocumentToJson(document)},
             {"editor", {{"exportDirectory", document.exportDirectory}, {"resourceName", document.resourceName}}},
         };
+        if (!document.clientModsFolder.empty() || !document.clientMods.empty()) {
+            project["editor"]["clientMods"] = {{"folder", document.clientModsFolder}, {"enabled", document.clientMods}};
+        }
         auto layers       = document.layers.ToJson(false);
         layers["objects"] = nlohmann::json::array();
         layers["effects"] = nlohmann::json::array();
@@ -634,6 +639,21 @@ namespace KCDC::Features::Prop {
                 }
             }
             document.exportDirectory = ReadString(*editor, "exportDirectory");
+            if (const auto clientMods = editor->find("clientMods"); clientMods != editor->end()) {
+                if (!clientMods->is_object() || !clientMods->contains("folder") || !clientMods->at("folder").is_string() || clientMods->at("folder").get_ref<const std::string &>().size() >= 1024 || !clientMods->contains("enabled") || !clientMods->at("enabled").is_array()) {
+                    error = "Invalid project client mods.";
+                    return false;
+                }
+                document.clientModsFolder = clientMods->at("folder").get<std::string>();
+                for (const nlohmann::json &name : clientMods->at("enabled")) {
+                    if (!name.is_string() || !Framework::Utils::StreamedAssets::IsValidResourceName(name.get_ref<const std::string &>())) {
+                        error = "Invalid project client mods.";
+                        return false;
+                    }
+                    document.clientMods.push_back(name.get<std::string>());
+                }
+                std::sort(document.clientMods.begin(), document.clientMods.end());
+            }
             if (const std::string resourceName = ReadString(*editor, "resourceName"); !resourceName.empty()) {
                 document.resourceName = resourceName;
             }

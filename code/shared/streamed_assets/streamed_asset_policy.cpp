@@ -1,7 +1,11 @@
 #include "streamed_asset_policy.h"
 
+#include "lua_script_scan.h"
+
 #include <array>
 #include <cctype>
+#include <fstream>
+#include <iterator>
 
 namespace KCDC::Shared::StreamedAssets {
     namespace {
@@ -23,6 +27,12 @@ namespace KCDC::Shared::StreamedAssets {
         // The engine folders whose roots are fixed, so their entries are namespaced by file prefix.
         constexpr std::array<std::string_view, 4> kFmodBankFolder        = {"sounds", "fmod", "build", "pc"};
         constexpr std::array<std::string_view, 2> kParticleLibraryFolder = {"libs", "particles"};
+
+        // What a level edit may replace inside `levels/<level>/`. Level metadata stays closed: a
+        // level's info file names a script the load runs.
+        constexpr std::array<std::string_view, 7> kLevelFolders    = {"terrain", "physics", "recast", "hlods", "cestool", "brush", "layers"};
+        constexpr std::array<std::string_view, 8> kLevelExtensions = {".dat", ".lst", ".ctc", ".xml", ".cgf", ".cgfm", ".hdr", ".nav"};
+        constexpr std::array<std::string_view, 4> kLevelStoredExtensions = {".dat", ".ctc", ".hdr", ".nav"};
 
         template <std::size_t N>
         bool Contains(const std::array<std::string_view, N> &set, std::string_view value) {
@@ -127,6 +137,48 @@ namespace KCDC::Shared::StreamedAssets {
             return stem.find('.') == std::string_view::npos;
         }
 
+        bool StartsWith(std::string_view text, std::string_view prefix) {
+            return text.size() > prefix.size() && text.substr(0, prefix.size()) == prefix;
+        }
+
+        // `whdata_<n>`, the level's own brush data, has no extension.
+        bool IsLevelWhData(std::string_view file) {
+            constexpr std::string_view prefix = "whdata_";
+            if (!StartsWith(file, prefix)) {
+                return false;
+            }
+            for (const char c : file.substr(prefix.size())) {
+                if (c < '0' || c > '9') {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool IsLevelEntityFile(std::string_view file) {
+            return EndsWith(file, ".xml") && (StartsWith(file, "objects_") || StartsWith(file, "mission_"));
+        }
+
+        // Whether a normalised path is one a level edit may replace.
+        bool IsLevelEntry(const std::vector<std::string_view> &segments) {
+            if (segments.size() < 3 || segments[0] != "levels") {
+                return false;
+            }
+            for (const char c : segments[1]) {
+                if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_')) {
+                    return false;
+                }
+            }
+            const std::string_view file = segments.back();
+            if (segments.size() == 3) {
+                return file == "occluder.ocm" || IsLevelWhData(file) || IsLevelEntityFile(file);
+            }
+            if (segments.size() == 5 && segments[2] == "tables" && segments[3] == "ai") {
+                return file == "scheduler.xml";
+            }
+            return Contains(kLevelFolders, segments[2]) && Contains(kLevelExtensions, ExtensionOf(file));
+        }
+
         // `kcdc_<resource>_<name>` with a name of its own.
         bool HasResourcePrefix(std::string_view file, std::string_view resource) {
             const std::string prefix = std::string(kNamespaceSegment) + "_" + std::string(resource) + "_";
@@ -141,7 +193,7 @@ namespace KCDC::Shared::StreamedAssets {
     }
 
     const std::vector<std::string> &Policy::GetLanes() const {
-        static const std::vector<std::string> lanes = {kLaneStream, kLaneReplace, kLaneLocalization};
+        static const std::vector<std::string> lanes = {kLaneStream, kLaneReplace, kLaneLocalization, kLaneLevel, kLaneScript};
         return lanes;
     }
 
@@ -186,7 +238,7 @@ namespace KCDC::Shared::StreamedAssets {
 
         const std::string_view file      = segments.back();
         const std::string_view extension = ExtensionOf(file);
-        if (extension.empty() || file.front() == '.') {
+        if ((extension.empty() && lane != kLaneLevel) || file.front() == '.') {
             reason = "file has no name or no extension";
             return false;
         }
@@ -235,6 +287,9 @@ namespace KCDC::Shared::StreamedAssets {
                 }
             }
         }
+        else if (lane == kLaneReplace && InFolder(segments, kFmodBankFolder) && Contains(kBankExtensions, extension)) {
+            // A KCD2 mod's banks keep their own names: its scripts and audio controls ask for them by name.
+        }
         else if (lane == kLaneReplace) {
             if (!IsAssetExtension(extension)) {
                 reason = "extension is not an asset kind the engine loads by path";
@@ -255,6 +310,18 @@ namespace KCDC::Shared::StreamedAssets {
                 return false;
             }
         }
+        else if (lane == kLaneLevel) {
+            if (!IsLevelEntry(segments)) {
+                reason = "not a file a level edit may replace";
+                return false;
+            }
+        }
+        else if (lane == kLaneScript) {
+            if (segments.size() < 3 || segments[0] != "scripts" || extension != ".lua") {
+                reason = "scripts must be scripts/.../<name>.lua";
+                return false;
+            }
+        }
         else {
             reason = "unknown lane";
             return false;
@@ -267,9 +334,76 @@ namespace KCDC::Shared::StreamedAssets {
     bool Policy::PrefersStore(std::string_view normalized) const {
         const std::size_t slash          = normalized.rfind('/');
         const std::string_view extension = ExtensionOf(normalized.substr(slash == std::string_view::npos ? 0 : slash + 1));
+        // A level's terrain, physics and navigation are read in pieces by offset and the game's own
+        // paks store them: deflated, a level streams in minutes rather than seconds.
+        if (normalized.substr(0, 7) == "levels/" && Contains(kLevelStoredExtensions, extension)) {
+            return true;
+        }
         // FMOD reads banks in place and streams their sample data; DDS mips and ogg are streamed
         // or already compressed.
         return extension == ".ogg" || extension.substr(0, 4) == ".dds" || Contains(kBankExtensions, extension);
+    }
+
+    bool Policy::ShouldShip(std::string_view lane, std::string_view, std::string_view normalized, const std::string &sourceFile, std::string &reason) const {
+        const bool script = lane == kLaneScript;
+        if (!script && (lane != kLaneLevel || !IsLevelEntityXml(normalized))) {
+            return true;
+        }
+        std::ifstream file(sourceFile, std::ios::binary);
+        const std::string text {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
+        if (!file.good() && !file.eof()) {
+            reason = "the file could not be read";
+            return false;
+        }
+        if (script && ScanLuaScript(text).unreadable) {
+            reason = "the script is precompiled";
+            return false;
+        }
+        if (!script && LevelXmlRunsScript(text)) {
+            reason = "the level's entity XML runs a script";
+            return false;
+        }
+        return true;
+    }
+
+    bool Policy::IsLevelEntityXml(std::string_view normalized) {
+        const std::vector<std::string_view> segments = Split(normalized);
+        if (segments.size() < 3 || segments[0] != "levels") {
+            return false;
+        }
+        return (segments.size() == 3 && IsLevelEntityFile(segments.back())) || (segments.size() > 3 && segments[2] == "layers" && EndsWith(normalized, ".xml"));
+    }
+
+    bool Policy::LevelXmlRunsScript(std::string_view xml) {
+        std::string folded(xml);
+        for (char &c : folded) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
+
+        constexpr std::string_view command = "scriptcommand";
+        constexpr std::string_view empty   = "=\"\"";
+        for (std::size_t at = folded.find(command); at != std::string::npos; at = folded.find(command, at + command.size())) {
+            if (folded.compare(at + command.size(), empty.size(), empty) != 0) {
+                return true;
+            }
+        }
+
+        // A flow node names its class in a value, where a character reference would hide the name
+        // from the search above. The game's own classes never use one.
+        constexpr std::string_view classAttribute = "class=\"";
+        for (std::size_t at = folded.find(classAttribute); at != std::string::npos; at = folded.find(classAttribute, at + classAttribute.size())) {
+            const std::size_t value = at + classAttribute.size();
+            const std::size_t close = folded.find('"', value);
+            if (close == std::string::npos || folded.find('&', value) < close) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool Policy::IsModEntryScript(std::string_view normalized) {
+        const std::vector<std::string_view> segments = Split(normalized);
+        return segments.size() == 3 && segments[0] == "scripts" && segments[1] == "mods" && EndsWith(normalized, ".lua");
     }
 
     bool Policy::IsAnimationClip(std::string_view normalized) {

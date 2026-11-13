@@ -12,7 +12,9 @@
 #include "shared/game/levels.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
 #include <string>
 #include <string_view>
 
@@ -96,6 +98,37 @@ namespace KCDC::Core::Boot {
             return std::nullopt;
         }
         return std::string(level, length);
+    }
+
+    std::optional<std::string> AgentTesting::TakeConnectLink() {
+        char path[MAX_PATH] {};
+        const DWORD length = GetEnvironmentVariableA("KCDC_TEST_CONNECT_FILE", path, static_cast<DWORD>(sizeof(path)));
+        if (length == 0 || length >= sizeof(path)) {
+            return std::nullopt;
+        }
+        std::ifstream file(path);
+        std::string link;
+        if (!file.is_open() || !std::getline(file, link)) {
+            return std::nullopt;
+        }
+        file.close();
+        std::remove(path);
+        return link;
+    }
+
+    std::optional<std::string> AgentTesting::WorldBuilderProject() const {
+        char path[MAX_PATH] {};
+        const DWORD length = GetEnvironmentVariableA("KCDC_TEST_WORLD_BUILDER_PROJECT", path, static_cast<DWORD>(sizeof(path)));
+        if (length == 0 || length >= sizeof(path)) {
+            return std::nullopt;
+        }
+        return std::string(path, length);
+    }
+
+    bool AgentTesting::AutoAcceptScripts() const {
+        char value[16] {};
+        const DWORD length = GetEnvironmentVariableA("KCDC_TEST_SCRIPT_APPROVAL", value, static_cast<DWORD>(sizeof(value)));
+        return length > 0 && length < sizeof(value) && std::string_view(value, length) == "accept";
     }
 
     std::wstring AgentTesting::GetWindowTitle() const {

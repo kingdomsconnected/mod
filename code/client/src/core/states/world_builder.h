@@ -24,6 +24,7 @@ namespace KCDC::Core::States {
 
       private:
         enum class Phase : std::uint8_t {
+            PreparingMods, // the project's client mods are being built and mounted
             HidingMenu, // waiting for a frame drawn without the page
             Loading,    // the level load is running
             Editing,    // the editor is open over the level

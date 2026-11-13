@@ -45,6 +45,8 @@ namespace KCDC::Features::Prop {
         document.level           = snapshot.level;
         document.exportDirectory = _exportDirectory;
         document.resourceName    = _mapName;
+        document.clientModsFolder = _clientModsFolder;
+        document.clientMods       = _clientMods;
         for (auto &object : document.objects) {
             if (!document.layers.Find(object.layer)) {
                 object.layer = "default";
@@ -148,6 +150,8 @@ namespace KCDC::Features::Prop {
         _areas.Import(document.areas, true, document.areaGroups);
         _patrols.Import(document.patrolRoutes, true);
         std::snprintf(_exportDirectory, sizeof(_exportDirectory), "%s", document.exportDirectory.c_str());
+        SetClientModsFolder(document.clientModsFolder);
+        _clientMods = document.clientMods;
         Command command;
         command.kind     = CommandKind::ReplaceDocument;
         command.document = std::make_shared<MapDocument>(document);
@@ -362,7 +366,7 @@ namespace KCDC::Features::Prop {
     void MapEditor::RenderDirectoryPicker() {
         CentreNextPopup();
         ImGui::SetNextWindowSize(ImVec2(620.0F, 0.0F), ImGuiCond_Appearing);
-        if (!ImGui::BeginPopupModal("Export folder", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!ImGui::BeginPopupModal(kDirectoryPicker, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             return;
         }
         ImGui::TextWrapped("Open a folder below, or enter a path to another drive or folder.");
@@ -401,7 +405,8 @@ namespace KCDC::Features::Prop {
         }
         ImGui::BeginDisabled(_browsedDirectory.empty());
         if (ImGui::Button("Use this folder")) {
-            std::snprintf(_exportDirectory, sizeof(_exportDirectory), "%s", _browsedDirectory.c_str());
+            std::snprintf(_directoryTarget, sizeof(_exportDirectory), "%s", _browsedDirectory.c_str());
+            _clientModsListed = false;
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndDisabled();
@@ -489,8 +494,9 @@ namespace KCDC::Features::Prop {
         ImGui::InputText("Resource name", _mapName, sizeof(_mapName));
         ImGui::InputText("Output directory", _exportDirectory, sizeof(_exportDirectory));
         if (ImGui::Button("Choose export directory...")) {
+            _directoryTarget = _exportDirectory;
             BrowseDirectory(_exportDirectory[0] != '\0' ? _exportDirectory : MapFiles::Directory());
-            ImGui::OpenPopup("Export folder");
+            ImGui::OpenPopup(kDirectoryPicker);
         }
         RenderDirectoryPicker();
         ImGui::TextWrapped("Choose a local server folder or any staging folder to upload later. Your project stays separate.");

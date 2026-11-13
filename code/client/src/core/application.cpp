@@ -747,6 +747,7 @@ namespace KCDC::Core {
         _mapEditor.ClearAndRelease();
         _mapEditor.RequestNewProject();
         SetOfflineBuilderLevel(levelName);
+        SetOfflineBuilderMods({}, {});
         HideMultiplayerFrontend();
         error.clear();
         return true;
@@ -833,6 +834,8 @@ namespace KCDC::Core {
         _offlineBuilderReady = false;
         _offlineBuilderEnded = true;
         _offlineBuilderLevel.clear();
+        SetOfflineBuilderMods({}, {});
+        _streamedAssetService.EndSession();
         ReturnToMenu();
     }
 
@@ -894,6 +897,7 @@ namespace KCDC::Core {
         }
         _multiplayerFrontend.ShowAdmission({});
         _multiplayerFrontend.ShowDownload(std::nullopt);
+        _multiplayerFrontend.ShowScriptApproval({});
         HideMultiplayerFrontend();
         _multiplayerFrontend.Update(*this);
         return true;

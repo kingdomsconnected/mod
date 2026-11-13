@@ -272,7 +272,7 @@ namespace KCDC::Features::Prop {
                     operation.job->state.compare_exchange_strong(queued, McpJob::State::Cancelled);
                 }
                 if (state == McpJob::State::Completed || state == McpJob::State::Failed || state == McpJob::State::Cancelled) {
-                    if (state == McpJob::State::Completed && operation.name != "wb_level_load" && snapshot.completedCommand < operation.serial) {
+                    if (state == McpJob::State::Completed && operation.name != "wb_level_load" && operation.name != "wb_client_mods_apply" && snapshot.completedCommand < operation.serial) {
                         continue;
                     }
                     operation.done   = true;

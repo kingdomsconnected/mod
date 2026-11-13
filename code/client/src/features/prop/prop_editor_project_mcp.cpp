@@ -1,6 +1,7 @@
 #include "prop_editor_project_mcp.h"
 
 #include "prop_editor.h"
+#include "core/application.h"
 #include "shared/features/world_builder/mcp_file_policy.h"
 #include "shared/features/world_builder/world_document.h"
 
@@ -120,6 +121,9 @@ namespace KCDC::Features::Prop {
             Tool("wb_project_recover", "Open the current recovery project; requires discardChanges=true if dirty.", false, {{"discardChanges", boolean}}),
             Tool("wb_project_save", "Save the project to an explicit .project.json under an allowed root, using a staged write.", false, {{"path", Text()}, {"overwrite", boolean}}, {"path"}),
             Tool("wb_project_update", "Set the resource name or an export directory within currently allowed roots. Select other export roots in World Builder.", false, {{"resourceName", Text(63)}, {"exportDirectory", Text()}}),
+            Tool("wb_client_mods_get", "Read the client mods folder, the mods found in it, which are ticked and which are loaded.", true, nlohmann::json::object()),
+            Tool("wb_client_mods_update", "Set the resources folder (within currently allowed roots; select others in World Builder) and which client mods are ticked. Offline only. Takes effect after wb_client_mods_apply.", false, {{"folder", Text()}, {"mods", {{"type", "array"}, {"maxItems", 64}, {"items", Text(64)}}}}),
+            Tool("wb_client_mods_apply", "Reload the level with the ticked client mods and reopen the saved project. Offline only; the project must be saved. Invalidates object IDs and drops this connection until the level is back.", false, nlohmann::json::object()),
             Tool("wb_document_get", "Read a paginated document collection; read project metadata with wb_project_get.", true,
                 {{"collection", {{"type", "string"}, {"enum", {"objects", "doors", "smartObjects", "items", "effects", "lights", "world", "areas", "patrolRoutes", "views"}}}}, {"offset", offset}, {"limit", limit}}, {"collection"}),
             Tool("wb_document_validate", "Validate a complete project, map, blueprint or world document without changing the editor.", true, {{"document", {{"type", "object"}}}}, {"document"}),
@@ -183,6 +187,16 @@ namespace KCDC::Features::Prop {
                 rows.push_back({{"name", Shared::WorldBuilder::McpFilePolicy::Utf8(entries[index].path().filename())}, {"path", Shared::WorldBuilder::McpFilePolicy::Utf8(entries[index].path())}, {"directory", entries[index].is_directory(error)}});
             }
             result = {{"path", Shared::WorldBuilder::McpFilePolicy::Utf8(directory)}, {"items", std::move(rows)}, {"total", entries.size()}, {"nextOffset", end < entries.size() ? nlohmann::json(end) : nlohmann::json(nullptr)}};
+            return true;
+        }
+        if (name == "wb_client_mods_get") {
+            editor.ListClientMods();
+            auto mods = nlohmann::json::array();
+            for (const auto &mod : editor._clientModList) {
+                mods.push_back({{"resource", mod.resource}, {"version", mod.version}, {"description", mod.description}, {"lanes", mod.lanes}, {"bytes", mod.bytes}, {"risky", mod.risky}, {"ticked", std::binary_search(editor._clientMods.begin(), editor._clientMods.end(), mod.resource)}});
+            }
+            const auto &assets = Core::gApplication->GetStreamedAssetService();
+            result             = {{"folder", editor._clientModsFolder}, {"listError", editor._clientModListError}, {"mods", std::move(mods)}, {"ticked", editor._clientMods}, {"loaded", assets.GetLocalMods()}, {"warnings", assets.GetLocalModWarnings()}};
             return true;
         }
         if (name == "wb_document_get") {
@@ -265,6 +279,38 @@ namespace KCDC::Features::Prop {
             editor.MarkProjectSaved(project);
             editor.RememberProject(path);
             result = {{"path", path}, {"saved", true}};
+        }
+        else if (name == "wb_client_mods_update") {
+            if (!Core::gApplication->IsOfflineBuilderReady()) {
+                throw std::runtime_error("Client mods are chosen in the offline World Builder");
+            }
+            if (!arguments.contains("folder") && !arguments.contains("mods")) {
+                throw std::runtime_error("Provide folder or mods");
+            }
+            if (arguments.contains("folder")) {
+                const auto folder = AllowedPath(arguments.at("folder").get<std::string>(), exportRoot);
+                if (folder.size() >= sizeof(editor._clientModsFolder)) {
+                    throw std::runtime_error("Resources folder exceeds editor limits");
+                }
+                editor.SetClientModsFolder(folder);
+            }
+            if (arguments.contains("mods")) {
+                auto mods = arguments.at("mods").get<std::vector<std::string>>();
+                std::sort(mods.begin(), mods.end());
+                mods.erase(std::unique(mods.begin(), mods.end()), mods.end());
+                editor._clientMods = std::move(mods);
+            }
+            result = {{"folder", editor._clientModsFolder}, {"ticked", editor._clientMods}, {"loaded", editor.ClientModsMatchLoaded()}};
+        }
+        else if (name == "wb_client_mods_apply") {
+            if (!Core::gApplication->IsOfflineBuilderReady()) {
+                throw std::runtime_error("Client mods are chosen in the offline World Builder");
+            }
+            std::string error;
+            if (!editor.ApplyClientMods(snapshot, error)) {
+                throw std::runtime_error(error);
+            }
+            result = {{"transitionAccepted", true}, {"loadingComplete", false}, {"reconnectRequired", true}};
         }
         else if (name == "wb_project_update") {
             if (!arguments.contains("resourceName") && !arguments.contains("exportDirectory")) {

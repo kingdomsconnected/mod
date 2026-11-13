@@ -274,6 +274,9 @@ namespace KCDC::Core {
         view->AddEventListener("menu.acceptDownload", [this](const std::string &) {
             _downloadAccepted = true;
         });
+        view->AddEventListener("menu.acceptScripts", [this](const std::string &) {
+            _scriptsAccepted = true;
+        });
         view->AddEventListener("menu.worldBuilder", [this](const std::string &payload) {
             // Latched like quit: the level load and the file dialog both belong to the tick.
             const nlohmann::json request = nlohmann::json::parse(payload, nullptr, false);
@@ -448,6 +451,22 @@ namespace KCDC::Core {
         return std::exchange(_downloadAccepted, false);
     }
 
+    void MultiplayerFrontend::ShowScriptApproval(std::vector<std::string> mods) {
+        if (_scriptApproval == mods) {
+            return;
+        }
+        // An accept latched for a card that is no longer up must not answer the next one.
+        if (mods.empty()) {
+            _scriptsAccepted = false;
+        }
+        _scriptApproval    = std::move(mods);
+        _presentationDirty = true;
+    }
+
+    bool MultiplayerFrontend::ConsumeScriptApproval() {
+        return std::exchange(_scriptsAccepted, false);
+    }
+
     std::optional<ConnectRequest> MultiplayerFrontend::ConsumeConnectRequest() {
         std::optional<ConnectRequest> request;
         request.swap(_connectRequest);
@@ -499,6 +518,7 @@ namespace KCDC::Core {
         else {
             state["download"] = nullptr;
         }
+        state["scriptApproval"] = _scriptApproval;
         // A typed address, a server's own kick reason and its admission status all land in here, so neither is known to
         // be valid UTF-8, and dump() throws rather than escaping what is not.
         view->EvaluateScript("window.KCDCMenu && window.KCDCMenu.setState(" + state.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + ");");

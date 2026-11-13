@@ -24,6 +24,19 @@ namespace {
             return false;
         }
     };
+
+    void CollectInterest(Framework::Networking::Replication::ReplicationManager &server, Framework::Networking::Replication::NetworkEntity *viewer, MafiaNet::PeerGuid viewerGuid, const std::unordered_set<Framework::Networking::Replication::NetworkEntity *> &previous, std::unordered_set<Framework::Networking::Replication::NetworkEntity *> &out) {
+        const Framework::Networking::Replication::InterestGrid &interest = server.Interest();
+        Framework::Networking::Replication::SlotSet previousSlots;
+        for (Framework::Networking::Replication::NetworkEntity *entity : previous) {
+            previousSlots.Set(interest.SlotOf(entity));
+        }
+        std::vector<std::uint32_t> slots;
+        interest.CollectVisible(viewer, viewerGuid, previousSlots, server.MainScratch(), slots);
+        for (const std::uint32_t slot : slots) {
+            out.insert(interest.EntityAt(slot));
+        }
+    }
 } // namespace
 
 void GroundItemReplicationTests() {
@@ -85,7 +98,7 @@ void GroundItemReplicationTests() {
     server->RebuildInterest();
     const std::unordered_set<Framework::Networking::Replication::NetworkEntity *> noPrevious;
     std::unordered_set<Framework::Networking::Replication::NetworkEntity *> firstVisible;
-    server->CollectInterest(firstViewer, firstPeer, noPrevious, firstVisible);
+    CollectInterest(*server,firstViewer, firstPeer, noPrevious, firstVisible);
     std::size_t visibleDrops = 0;
     for (auto *drop : drops) {
         visibleDrops += firstVisible.contains(drop) ? 1 : 0;
@@ -134,11 +147,11 @@ void GroundItemReplicationTests() {
     }
 
     std::unordered_set<Framework::Networking::Replication::NetworkEntity *> lateVisible;
-    server->CollectInterest(lateViewer, latePeer, noPrevious, lateVisible);
+    CollectInterest(*server,lateViewer, latePeer, noPrevious, lateVisible);
     lateViewer->position = {1800.0F, 100.0F, 20.0F};
     server->RebuildInterest();
     std::unordered_set<Framework::Networking::Replication::NetworkEntity *> streamedOut;
-    server->CollectInterest(lateViewer, latePeer, lateVisible, streamedOut);
+    CollectInterest(*server,lateViewer, latePeer, lateVisible, streamedOut);
     for (auto *drop : drops) {
         RequireGroundReplication(!streamedOut.contains(drop), "leaving range removes drops from observer interest");
     }
@@ -146,7 +159,7 @@ void GroundItemReplicationTests() {
     lateViewer->position = firstViewer->position;
     server->RebuildInterest();
     std::unordered_set<Framework::Networking::Replication::NetworkEntity *> returned;
-    server->CollectInterest(lateViewer, latePeer, streamedOut, returned);
+    CollectInterest(*server,lateViewer, latePeer, streamedOut, returned);
     for (auto *drop : drops) {
         returnedDrops += returned.contains(drop) ? 1 : 0;
     }
@@ -177,7 +190,7 @@ void GroundItemReplicationTests() {
     lateViewer->SetVirtualWorld(6);
     server->RebuildInterest();
     std::unordered_set<Framework::Networking::Replication::NetworkEntity *> changedWorld;
-    server->CollectInterest(lateViewer, latePeer, returned, changedWorld);
+    CollectInterest(*server,lateViewer, latePeer, returned, changedWorld);
     RequireGroundReplication(changedWorld.contains(otherWorld), "changing virtual world admits its own nearby ground stock");
     for (auto *drop : drops) {
         RequireGroundReplication(!changedWorld.contains(drop), "changing virtual world removes previous world ground stock");

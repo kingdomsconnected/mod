@@ -62,6 +62,27 @@ MODULE(world_builder_editor_preferences, {
         }
     });
 
+    IT("persists the ticked client mods and omits them from projects without any", {
+        KCDC::Features::Prop::MapDocument document, restored;
+        document.level = "kutnohorsko";
+        std::string error;
+        auto plain = KCDC::Features::Prop::ProjectToJson(document);
+        EQUALS(plain["editor"].contains("clientMods"), false);
+
+        document.clientModsFolder = "E:/server/resources";
+        document.clientMods       = {"zeta", "alpha"};
+        auto project              = KCDC::Features::Prop::ProjectToJson(document);
+        EQUALS(KCDC::Features::Prop::ParseProject(project.dump(), restored, error), true);
+        EQUALS(restored.clientModsFolder, std::string("E:/server/resources"));
+        EQUALS(restored.clientMods.size(), std::size_t(2));
+        EQUALS(restored.clientMods[0], std::string("alpha"));
+
+        project["editor"]["clientMods"]["enabled"] = {"Not A Resource"};
+        EQUALS(KCDC::Features::Prop::ParseProject(project.dump(), restored, error), false);
+        project["editor"]["clientMods"] = "wrong";
+        EQUALS(KCDC::Features::Prop::ParseProject(project.dump(), restored, error), false);
+    });
+
     IT("persists bounds picking and defaults older projects to solid picking", {
         KCDC::Features::Prop::MapDocument document, restored;
         document.level                      = "kutnohorsko";

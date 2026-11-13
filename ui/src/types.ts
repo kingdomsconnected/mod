@@ -48,6 +48,11 @@ export interface FrontendPresentation {
      * size; the card then asks rather than shows progress.
      */
     download: DownloadProgress | null;
+    /**
+     * Mods whose scripts ask for file, system or dynamic-code access, one line each. The card asks
+     * the player to accept them or leave. Empty when nothing needs asking.
+     */
+    scriptApproval: string[];
 }
 
 export interface DownloadProgress {
