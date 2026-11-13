@@ -32,8 +32,26 @@ namespace KCDC::Shared::Game {
         /** What a script finds it by; empty for none. */
         std::string name;
 
+        /**
+         * Only what the interaction runs on -- the seat, the bed, the
+         * station and their triggers -- without the blueprint's furniture,
+         * for a place put on a prop of the mapper's own choosing. Only a
+         * blueprint `SmartObjectStandsBare` passes takes it.
+         */
+        bool bare = false;
+
         static constexpr std::size_t kMaxNameLength = 64;
     };
+
+    /**
+     * Whether a blueprint has furniture a bare placement leaves out: its
+     * static meshes. A chair's seat is one of its own entities, which the
+     * game moves with the sitter, and a smokehouse has none at all, so
+     * neither has anything to leave out.
+     */
+    inline bool SmartObjectStandsBare(const SmartObjectBlueprint &blueprint) {
+        return blueprint.brushCount > 0;
+    }
 
     inline nlohmann::json SmartObjectDefinitionToJson(const SmartObjectDefinition &object) {
         nlohmann::json entry {
@@ -43,6 +61,10 @@ namespace KCDC::Shared::Game {
         };
         if (!object.name.empty()) {
             entry["name"] = object.name;
+        }
+        // Written only when set, so an entry without it reads as it always did.
+        if (object.bare) {
+            entry["bare"] = true;
         }
         return entry;
     }
@@ -54,14 +76,13 @@ namespace KCDC::Shared::Game {
             error = "a smart object must be an object";
             return false;
         }
-        object.blueprint = LevelEditDefinitionJson::ReadString(entry, "blueprint");
-        if (const SmartObjectBlueprint *blueprint = FindSmartObjectBlueprint(object.blueprint); blueprint == nullptr) {
+        object.blueprint                      = LevelEditDefinitionJson::ReadString(entry, "blueprint");
+        const SmartObjectBlueprint *blueprint = FindSmartObjectBlueprint(object.blueprint);
+        if (blueprint == nullptr) {
             error = object.blueprint.empty() ? "a smart object needs a blueprint" : "'" + object.blueprint + "' is not a smart object blueprint; SmartObject.blueprints() lists them";
             return false;
         }
-        else {
-            object.blueprint = std::string(blueprint->name);
-        }
+        object.blueprint = std::string(blueprint->name);
         if (!LevelEditDefinitionJson::ReadVector(entry, "position", object.position)) {
             error = "position must be where it stands, as [x, y, z] or a Vector3";
             return false;
@@ -73,6 +94,17 @@ namespace KCDC::Shared::Game {
         object.name = LevelEditDefinitionJson::ReadString(entry, "name");
         if (object.name.size() > SmartObjectDefinition::kMaxNameLength) {
             error = "name is longer than 64 characters";
+            return false;
+        }
+        if (const auto bare = entry.find("bare"); bare != entry.end()) {
+            if (!bare->is_boolean()) {
+                error = "bare must be true or false";
+                return false;
+            }
+            object.bare = bare->get<bool>();
+        }
+        if (object.bare && !SmartObjectStandsBare(*blueprint)) {
+            error = "'" + object.blueprint + "' cannot stand bare: it has no furniture apart from its own entities; SmartObject.blueprints() says which can";
             return false;
         }
         return true;
@@ -114,6 +146,9 @@ namespace KCDC::Shared::Entities {
         /** What its parts' GUIDs are minted from; unique per server run. */
         std::uint32_t serial = 0;
 
+        /** Built without the blueprint's furniture: `SmartObjectDefinition::bare`. */
+        bool bare = false;
+
         std::uint64_t PartGuid(std::size_t part) const {
             return Game::SmartObjectPartGuid(serial, part);
         }
@@ -134,6 +169,7 @@ namespace KCDC::Shared::Entities {
             fields.Field(rotation.y);
             fields.Field(rotation.z);
             fields.Field(rotation.w);
+            fields.Field(bare);
         }
 
         void SerializeFields(Framework::Networking::Replication::FieldSerializer &) override {}

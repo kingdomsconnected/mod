@@ -29,7 +29,7 @@ namespace KCDC::Features::LevelEdit {
         // Whether `model` is a mesh an edit can swap an object for: a prop catalog path, or one this server streams. `error` says why not.
         static bool IsSwapModel(const std::string &model, std::string &error);
 
-        // Puts the object at a pose of the server's choosing; the scale is clamped, as the editor clamps its own.
+        // Puts the object at a pose of the server's choosing; the scale is clamped, as the editor clamps its own. False for a grass edit, whose box is its key.
         static bool Move(Shared::Entities::LevelEditEntity *edit, const glm::vec3 &position, const glm::quat &rotation, const glm::vec3 &scale);
 
         // Takes a move back: the object stands where the level put it again.

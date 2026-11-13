@@ -262,7 +262,11 @@ namespace KCDC::Features::Animation {
                 Drive(human->GetNetworkID(), human->ResolveActor(), playback, human->face, false, false, static_cast<std::uint64_t>(human->ownerGUID), station || nativeDice);
             }
         });
-        replication->ForEach<KCDC::Features::Npc::Npc>([&](KCDC::Features::Npc::Npc *npc) { Drive(npc->GetNetworkID(), npc->ResolveActor(), npc->animation, npc->face, false, npc->IsSimulating(), 0); });
+        replication->ForEach<KCDC::Features::Npc::Npc>([&](KCDC::Features::Npc::Npc *npc) {
+            // Native dice owns an NPC opponent as completely as a player's copy.
+            const bool nativeDice = KCDC::Features::Dice::DiceModule::Get().HoldsBody(npc->GetEntityId());
+            Drive(npc->GetNetworkID(), npc->ResolveActor(), nativeDice ? Shared::Game::AnimationPlayback {} : npc->animation, npc->face, false, npc->IsSimulating(), 0, nativeDice);
+        });
 
         // A body whose entity went away this tick. Its actor may well outlive
         // it -- an adopted NPC is the level's own body -- so it is cleaned up

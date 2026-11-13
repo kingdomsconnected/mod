@@ -30,6 +30,9 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include "sdk/cryengine/entitysystem/i_entity.h"
+#include "sdk/cryengine/entitysystem/i_entity_class.h"
+#include "sdk/cryengine/entitysystem/i_entity_iterator.h"
+#include "sdk/cryengine/entitysystem/i_entity_system.h"
 #include "sdk/cryengine/physics/c_physical_world.h"
 
 #include "features/camera/fly_keys.h"
@@ -39,6 +42,7 @@
 #include "features/prop/prop_ghost.h"
 #include "shared/game/smart_object_blueprints.h"
 
+#include "shared/game/npc_roles.h"
 #include "shared/game/prop_models.h"
 #include "shared/game/vfx_catalog.h"
 
@@ -325,6 +329,7 @@ namespace KCDC::Features::Prop {
         _environment.RequestRelease();
         EditorCapture::Get().Shutdown();
         _patrolPreview.Stop();
+        _figure.Remove();
         KCDC_JUNK;
         _open.store(false, std::memory_order_release);
         _looking.store(false, std::memory_order_release);
@@ -339,6 +344,7 @@ namespace KCDC::Features::Prop {
         _world.Forget();
         _effects.Forget();
         _lights.Forget();
+        _grass.Forget();
         _armedGhost     = 0;
         _armedEmitter   = 0;
         _armedModel     = AssetLibrary::kNone;
@@ -377,6 +383,7 @@ namespace KCDC::Features::Prop {
             _completedCommand = _nextCommand.load(std::memory_order_acquire);
         }
         _patrolPreview.Stop();
+        _figure.Remove();
         KCDC_JUNK;
         Disarm();
         SetPreview(AssetLibrary::kNone, false);
@@ -388,6 +395,7 @@ namespace KCDC::Features::Prop {
         _history.Clear();
 
         _world.RestoreAll();
+        _grass.Clear();
 
         ClearSelection();
         SetStatus("Scene cleared");
@@ -497,23 +505,37 @@ namespace KCDC::Features::Prop {
         return false;
     }
 
+    MapEditor::ScenePick MapEditor::PickScene(const SDK::Vec3 &heading, PickEffort effort) {
+        const KCDC::Features::Camera::CameraPose &pose = _camera.GetPose();
+        ScenePick result;
+
+        // The level's bounds passes leave the editor's objects out: their boxes are weighed below, against what the ray struck.
+        result.world = _world.Pick(pose.position, heading, kPickRange, effort, _viewport.pickPreferPhysics, &_scene.OwnedEntities());
+
+        PickSurface surface;
+        surface.hit      = result.world.kind != WorldPickKind::None && !result.world.boundsOnly;
+        surface.distance = result.world.distance;
+        surface.point    = result.world.hitPoint;
+
+        // Physics can return the entity; the octree returns its render node.
+        if (const std::uint64_t own = _scene.FindByPick(result.world)) {
+            surface.placed = CanEdit({SelectionKind::Placed, own}) ? own : 0;
+            result.world   = WorldPick {};
+        }
+
+        _scene.CollectPickBoxes(_pickBoxes, &_layers);
+        result.placed = ChoosePlacedPick(_pickBoxes, pose.position, heading, kPickRange, surface);
+        return result;
+    }
+
     MapEditor::PickResult MapEditor::PickThrough(const SDK::Vec3 &heading, PickEffort effort) {
         const KCDC::Features::Camera::CameraPose &pose = _camera.GetPose();
         PickResult result;
 
-        // The box test is what finds a prop spawned without physics.
-        float placedDistance    = kPickRange;
-        std::uint64_t placedHit = _scene.PickNearest(pose.position, heading, kPickRange, placedDistance, &_layers);
-        WorldPick worldHit      = _world.Pick(pose.position, heading, kPickRange, effort, _viewport.pickPreferPhysics);
-
-        // Physics can return the entity; the octree returns its render node.
-        if (const std::uint64_t own = _scene.FindByPick(worldHit)) {
-            if (CanEdit({SelectionKind::Placed, own}) && (placedHit == 0 || worldHit.distance <= placedDistance)) {
-                placedHit      = own;
-                placedDistance = worldHit.distance;
-            }
-            worldHit = WorldPick {};
-        }
+        const ScenePick scene         = PickScene(heading, effort);
+        const std::uint64_t placedHit = scene.placed.id;
+        const float placedDistance    = placedHit != 0 ? scene.placed.distance : kPickRange;
+        WorldPick worldHit            = scene.world;
 
         if (worldHit.kind != WorldPickKind::None) {
             const auto adopted       = _world.FindByPick(worldHit);
@@ -565,16 +587,18 @@ namespace KCDC::Features::Prop {
             result.effect = effectHit;
             distance      = effectDistance;
         }
-        // A tie goes to the editor's own object.
-        else if (worldHit.kind != WorldPickKind::None && (placedHit == 0 || worldHit.distance < placedDistance - 0.01F)) {
+        // The editor's object was chosen against the solid surface already; only a nearer box of the level's still outranks it.
+        else if (worldHit.kind != WorldPickKind::None && (placedHit == 0 || (worldHit.boundsOnly && worldHit.distance < placedDistance - 0.01F))) {
             result.world = worldHit;
             distance     = worldHit.distance;
         }
         else if (placedHit != 0) {
-            result.placed = placedHit;
-            distance      = placedDistance;
+            result.placed       = placedHit;
+            result.placedMethod = scene.placed.method;
+            distance            = placedDistance;
         }
-        result.point = SDK::Vec3 {pose.position.x + heading.x * distance, pose.position.y + heading.y * distance, pose.position.z + heading.z * distance};
+        result.distance = distance;
+        result.point    = SDK::Vec3 {pose.position.x + heading.x * distance, pose.position.y + heading.y * distance, pose.position.z + heading.z * distance};
         return result;
     }
 
@@ -988,6 +1012,9 @@ namespace KCDC::Features::Prop {
             case CommandKind::RestoreWorld:
             case CommandKind::RestoreAllWorld:
             case CommandKind::DropToGround:
+            case CommandKind::FlattenPlants:
+            case CommandKind::ClearGrass:
+            case CommandKind::RestoreGrass:
             case CommandKind::PlaceLight:
             case CommandKind::SetLightTuning:
             case CommandKind::SetEffectTuning:
@@ -1079,6 +1106,7 @@ namespace KCDC::Features::Prop {
             _mapTravel.Reset();
             _areaCollision.Forget();
             _patrolPreview.Stop(true);
+            _figure.Remove(true);
             // Forget rather than restore: the nodes are freed, and queued
             // browser rows name nodes by pointer.
             {
@@ -1091,6 +1119,7 @@ namespace KCDC::Features::Prop {
             ClearUnresolved();
             _effects.Forget();
             _lights.Forget();
+            _grass.Forget();
             _layers          = EditorLayers();
             _layersPublished = std::make_shared<const EditorLayers>(_layers);
             _history.Clear();
@@ -1119,6 +1148,8 @@ namespace KCDC::Features::Prop {
         if (!open && _patrolPreview.Active()) {
             _patrolPreview.Stop();
         }
+        // The figure stays through F7, so the scene can be walked with it standing there.
+        _figure.Update();
 
         const auto reconcileControls = [&] {
             const bool controls = open && !_mapTravel.NativeInput();
@@ -1197,6 +1228,19 @@ namespace KCDC::Features::Prop {
             UpdateBrush();
             UpdatePreview(delta);
             _patrolPreview.Update();
+        }
+
+        // Walking every entity is not free: about once a second, and only while the overlay is on.
+        if (interacting && _poseAnchorsShown.load(std::memory_order_relaxed)) {
+            if (_poseAnchorsRead.time_since_epoch().count() == 0 || now - _poseAnchorsRead >= std::chrono::seconds(1)) {
+                _poseAnchorsRead = now;
+                _poseAnchors.clear();
+                CollectPoseAnchors(_camera.GetPose().position, _poseAnchorReach.load(std::memory_order_relaxed), _poseAnchors);
+            }
+        }
+        else {
+            _poseAnchors.clear();
+            _poseAnchorsRead = {};
         }
 
         // The brush has its own readout.
@@ -1721,6 +1765,9 @@ namespace KCDC::Features::Prop {
             HistoryStep step;
             step.label = "Place " + worldObject->name;
             AppendPlaced(step, SelectionKind::Placed, placed);
+            if (_placement.flattenPlants) {
+                FlattenPlantsUnder(placed, _placement.plants, step);
+            }
             _history.Record(std::move(step), &_layers);
             std::snprintf(message, sizeof(message), "Placed %s #%llu at %.1f, %.1f, %.1f -- its settings are in the Object tab", PlacedKindLabel(worldObject->kind), static_cast<unsigned long long>(placed), _armedPosition.x, _armedPosition.y, _armedPosition.z);
             SetStatus(message);
@@ -1741,11 +1788,50 @@ namespace KCDC::Features::Prop {
         HistoryStep step;
         step.label = "Place " + std::string {model->name};
         AppendPlaced(step, SelectionKind::Placed, placed);
+        if (_placement.flattenPlants) {
+            FlattenPlantsUnder(placed, _placement.plants, step);
+        }
         _history.Record(std::move(step), &_layers);
         std::snprintf(message, sizeof(message), "Placed #%llu at %.1f, %.1f, %.1f", static_cast<unsigned long long>(placed), _armedPosition.x, _armedPosition.y, _armedPosition.z);
         SetStatus(message);
 
         RollBrush();
+    }
+
+    std::size_t MapEditor::FlattenPlantsUnder(std::uint64_t placedId, const PlantFlattening &options, HistoryStep &step) {
+        const auto *defaultLayer = _layers.Find("default");
+        SDK::AABB bounds {};
+        if (!options.IsSane() || !defaultLayer->visible || defaultLayer->locked || !_scene.LiveBounds(placedId, bounds)) {
+            return 0;
+        }
+
+        // The octree lists every plant in the column, collider or none; a ray would miss the ones without.
+        const SDK::AABB sweep = PlantSweepBox(bounds, options);
+        std::vector<LevelCandidate> candidates;
+        bool truncated = false;
+        _world.Collect(sweep, candidates, truncated);
+
+        std::size_t flattened = 0;
+        for (const LevelCandidate &candidate : candidates) {
+            if (candidate.kind != SelectableKinds::Vegetation || candidate.hidden || !IsFlattenedPlant(sweep, candidate.position, candidate.bounds, candidate.hasBounds, options)) {
+                continue;
+            }
+            const std::uint64_t id = _world.Adopt(candidate.pick);
+            const WorldEdit *edit  = id != 0 ? _world.Find(id) : nullptr;
+            if (edit == nullptr || edit->hidden || !CanEdit({SelectionKind::World, id})) {
+                continue;
+            }
+            HistoryAction action;
+            action.kind         = HistoryAction::Kind::WorldHide;
+            action.id           = id;
+            action.hiddenBefore = false;
+            action.hiddenAfter  = true;
+            if (_world.SetHidden(id, true)) {
+                step.actions.push_back(std::move(action));
+                ++flattened;
+            }
+        }
+        return flattened;
     }
 
     void MapEditor::AppendPlaced(HistoryStep &step, SelectionKind kind, std::uint64_t id) const {
@@ -1904,6 +1990,49 @@ namespace KCDC::Features::Prop {
         return copy;
     }
 
+    std::uint64_t MapEditor::ClearGrassIn(const Shared::Game::GrassClearing &box, HistoryStep &step, KCDC::Features::Grass::GrassChange &change) {
+        if (_grass.FindBox(box) != nullptr) {
+            return 0;
+        }
+        const std::uint64_t id = _grass.Add(box, &change);
+        if (id == 0) {
+            return 0;
+        }
+        HistoryAction action;
+        action.kind  = HistoryAction::Kind::GrassPlace;
+        action.id    = id;
+        action.grass = *_grass.Find(id);
+        step.actions.push_back(std::move(action));
+        return id;
+    }
+
+    std::uint64_t MapEditor::ClearGrassUnder(std::uint64_t placedId, const GrassClearingOptions &options, HistoryStep &step, KCDC::Features::Grass::GrassChange &change) {
+        const PlacedObject *object = _scene.Find(placedId);
+        SDK::AABB world {}, local {};
+        bool hasLocal = false;
+        Shared::Game::GrassClearing box;
+        if (object == nullptr || !_scene.FootprintBounds(placedId, world, local, hasLocal) || !GrassClearingUnder(object->position, object->rotation, object->scale, hasLocal ? &local : nullptr, world, options, box)) {
+            return 0;
+        }
+        return ClearGrassIn(box, step, change);
+    }
+
+    bool MapEditor::RestoreGrass(std::uint64_t clearingId, HistoryStep &step) {
+        const PlacedClearing *clearing = _grass.Find(clearingId);
+        if (clearing == nullptr) {
+            return false;
+        }
+        HistoryAction action;
+        action.kind  = HistoryAction::Kind::GrassDelete;
+        action.id    = clearingId;
+        action.grass = *clearing;
+        if (!_grass.Remove(clearingId)) {
+            return false;
+        }
+        step.actions.push_back(std::move(action));
+        return true;
+    }
+
     void MapEditor::ClearUnresolved() {
         _unresolvedDocument = MapDocument {};
         _unresolvedPublished.reset();
@@ -1977,6 +2106,12 @@ namespace KCDC::Features::Prop {
         std::size_t missing = 0;
         std::size_t waiting = 0;
         for (const Shared::Game::LevelEditDefinition &entry : document.world) {
+            // Grass names no object: the box goes to the clearings, in the same undo step.
+            if (entry.kind == Shared::Game::LevelEditKind::Grass) {
+                KCDC::Features::Grass::GrassChange ignored;
+                matched += entry.hidden && ClearGrassIn(entry.Clearing(), step, ignored) != 0 ? 1 : 0;
+                continue;
+            }
             const std::uint64_t id = _world.ApplyDocument(entry);
             const WorldEdit *edit  = id != 0 ? _world.Find(id) : nullptr;
             if (edit == nullptr) {
@@ -2135,6 +2270,8 @@ namespace KCDC::Features::Prop {
         case CommandKind::ConvertSelection:
         case CommandKind::GroupSelection:
         case CommandKind::DropToGround:
+        case CommandKind::FlattenPlants:
+        case CommandKind::ClearGrass:
             for (const auto &ref : SelectionRefs()) {
                 if (!CanEdit(ref)) {
                     SetStatus("Selection includes a hidden or locked layer.");
@@ -2210,12 +2347,39 @@ namespace KCDC::Features::Prop {
         }
         case CommandKind::PatrolPreview:
             if (command.patrolRoute && IsOpen() && Core::gApplication) {
+                // The game keeps one preview body.
+                _figure.Remove();
                 _patrolPreview.Start(*command.patrolRoute, command.previewRole, Core::gApplication->GetCurrentLevelName());
             }
             else {
                 _patrolPreview.Stop();
             }
             break;
+        case CommandKind::Figure: {
+            if (!command.enable) {
+                _figure.Remove();
+                SetStatus(_figure.Status());
+                break;
+            }
+            SDK::Vec3 position = command.position;
+            float yaw          = command.value;
+            if (command.aimed) {
+                SDK::Vec3 normal {};
+                bool hit = false;
+                ResolveAim(command.ndcX, command.ndcY, 0.0F, position, normal, hit);
+                if (!hit) {
+                    SetStatus("Point at the ground or a floor to stand the figure on it");
+                    break;
+                }
+                // Facing the camera, so its proportions read at once.
+                yaw = _camera.GetPose().yawDegrees + 180.0F;
+            }
+            // The game keeps one preview body.
+            _patrolPreview.Stop();
+            _figure.Place(command.previewRole, position, yaw);
+            SetStatus(_figure.Status());
+            break;
+        }
         case CommandKind::ReplaceDocument:
             _areaCollision.Reset();
             EditorLayerRender::Get().Clear();
@@ -2226,6 +2390,7 @@ namespace KCDC::Features::Prop {
             _effects.Clear();
             _lights.Clear();
             _world.RestoreAll();
+            _grass.Clear();
             ClearSelection();
             if (command.document != nullptr) {
                 _layers = command.document->layers;
@@ -2781,7 +2946,7 @@ namespace KCDC::Features::Prop {
             const auto authoredSerial = _history.AuthoredRestoreSerial();
             std::string label;
             std::vector<SelectionRef> touched;
-            SetStatus(_history.Undo(_scene, _world, _effects, _lights, label, &_layers, &touched) ? "Undid: " + label : std::string {"Nothing to undo"});
+            SetStatus(_history.Undo(_scene, _world, _effects, _lights, _grass, label, &_layers, &touched) ? "Undid: " + label : std::string {"Nothing to undo"});
             SelectTouched(touched);
             if (_history.AuthoredRestoreSerial() != authoredSerial) {
                 _patrolPreview.Stop();
@@ -2796,7 +2961,7 @@ namespace KCDC::Features::Prop {
             const auto authoredSerial = _history.AuthoredRestoreSerial();
             std::string label;
             std::vector<SelectionRef> touched;
-            SetStatus(_history.Redo(_scene, _world, _effects, _lights, label, &_layers, &touched) ? "Redid: " + label : std::string {"Nothing to redo"});
+            SetStatus(_history.Redo(_scene, _world, _effects, _lights, _grass, label, &_layers, &touched) ? "Redid: " + label : std::string {"Nothing to redo"});
             SelectTouched(touched);
             if (_history.AuthoredRestoreSerial() != authoredSerial) {
                 _patrolPreview.Stop();
@@ -2889,6 +3054,92 @@ namespace KCDC::Features::Prop {
                 ClearSelection();
             }
             std::snprintf(message, sizeof(message), "Nothing under the cursor (weighed %d level object%s)", picked.inspected, picked.inspected == 1 ? "" : "s");
+            SetStatus(message);
+            break;
+        }
+
+        case CommandKind::FlattenPlants: {
+            PlantFlattening options;
+            options.margin    = command.value;
+            options.maxHeight = command.value2;
+            HistoryStep step;
+            step.label            = "Flatten plants";
+            std::size_t objects   = 0;
+            std::size_t flattened = 0;
+            for (const SelectionRef &ref : SelectionRefs()) {
+                if (ref.kind == SelectionKind::Placed) {
+                    ++objects;
+                    flattened += FlattenPlantsUnder(ref.id, options, step);
+                }
+            }
+            if (objects == 0) {
+                SetStatus("Select something you placed to flatten the plants under it");
+                break;
+            }
+            if (flattened == 0) {
+                SetStatus("None of the level's low plants stand under the selection -- grass merged into the terrain is not an object and stays");
+                break;
+            }
+            _history.Record(std::move(step), &_layers);
+            std::snprintf(message, sizeof(message), "Took %zu plant%s out from under %zu object%s -- Ctrl+Z puts them back", flattened, flattened == 1 ? "" : "s", objects, objects == 1 ? "" : "s");
+            SetStatus(message);
+            break;
+        }
+
+        case CommandKind::ClearGrass: {
+            GrassClearingOptions options;
+            options.margin = command.value;
+            HistoryStep step;
+            step.label          = "Clear the grass";
+            std::size_t objects = 0;
+            KCDC::Features::Grass::GrassChange total;
+            for (const SelectionRef &ref : SelectionRefs()) {
+                if (ref.kind != SelectionKind::Placed) {
+                    continue;
+                }
+                ++objects;
+                KCDC::Features::Grass::GrassChange change;
+                if (ClearGrassUnder(ref.id, options, step, change) != 0) {
+                    total.sectors += change.sectors;
+                    total.plants  += change.plants;
+                }
+            }
+            if (objects == 0) {
+                SetStatus("Select something you placed to clear the grass under it");
+                break;
+            }
+            if (step.actions.empty()) {
+                SetStatus("Nothing new to clear: the selection has no box, or the grass under it is cleared already");
+                break;
+            }
+            const std::size_t cleared = step.actions.size();
+            _history.Record(std::move(step), &_layers);
+            std::snprintf(message, sizeof(message), "Cleared the grass under %zu object%s: %zu plant%s went -- Ctrl+Z brings them back", cleared, cleared == 1 ? "" : "s", total.plants, total.plants == 1 ? "" : "s");
+            SetStatus(message);
+            break;
+        }
+
+        case CommandKind::RestoreGrass: {
+            std::vector<std::uint64_t> ids;
+            if (command.id != 0) {
+                ids.push_back(command.id);
+            }
+            else {
+                for (const PlacedClearing &clearing : _grass.Clearings()) {
+                    ids.push_back(clearing.id);
+                }
+            }
+            HistoryStep step;
+            step.label = "Give the grass back";
+            for (const std::uint64_t id : ids) {
+                RestoreGrass(id, step);
+            }
+            if (step.actions.empty()) {
+                break;
+            }
+            const std::size_t restored = step.actions.size();
+            _history.Record(std::move(step), &_layers);
+            std::snprintf(message, sizeof(message), "Gave the grass of %zu clearing%s back -- Ctrl+Z clears it again", restored, restored == 1 ? "" : "s");
             SetStatus(message);
             break;
         }
@@ -3233,16 +3484,10 @@ namespace KCDC::Features::Prop {
         const KCDC::Features::Camera::CameraPose &pose = _camera.GetPose();
         const SDK::Vec3 heading                        = KCDC::Features::Camera::RayThroughNdc(pose, _cursorNdcX.load(std::memory_order_acquire), _cursorNdcY.load(std::memory_order_acquire));
 
-        float placedDistance    = kPickRange;
-        std::uint64_t placedHit = _scene.PickNearest(pose.position, heading, kPickRange, placedDistance, &_layers);
-        WorldPick worldHit      = _world.Pick(pose.position, heading, kPickRange, PickEffort::Quick, _viewport.pickPreferPhysics);
-        if (const auto own = _scene.FindByPick(worldHit)) {
-            if (placedHit == 0 || worldHit.distance <= placedDistance) {
-                placedHit      = own;
-                placedDistance = worldHit.distance;
-            }
-            worldHit = {};
-        }
+        const ScenePick scene         = PickScene(heading, PickEffort::Quick);
+        const std::uint64_t placedHit = scene.placed.id;
+        const float placedDistance    = placedHit != 0 ? scene.placed.distance : kPickRange;
+        const WorldPick &worldHit     = scene.world;
 
         _hover = HoverInfo {};
 
@@ -3271,7 +3516,7 @@ namespace KCDC::Features::Prop {
             return;
         }
 
-        const bool worldWins = worldHit.kind != WorldPickKind::None && (placedHit == 0 || worldHit.distance < placedDistance - 0.01F);
+        const bool worldWins = worldHit.kind != WorldPickKind::None && (placedHit == 0 || (worldHit.boundsOnly && worldHit.distance < placedDistance - 0.01F));
         if (placedHit != 0 && !worldWins) {
             const PlacedObject *object = _scene.Find(placedHit);
             if (object != nullptr) {
@@ -3400,6 +3645,13 @@ namespace KCDC::Features::Prop {
         snapshot.patrolProgress      = _patrolPreview.Progress();
         snapshot.patrolPreviewStatus = _patrolPreview.Status();
         snapshot.patrolPath          = _patrolPreview.Path();
+        snapshot.poseAnchors         = _poseAnchors;
+        snapshot.figureActive        = _figure.Active();
+        snapshot.figureStanding      = _figure.Standing();
+        snapshot.figureRole          = _figure.Role();
+        snapshot.figureStatus        = _figure.Status();
+        snapshot.figurePosition      = _figure.Position();
+        snapshot.figureYaw           = _figure.YawDegrees();
         snapshot.completedCommand    = _completedCommand;
         snapshot.unresolvedDocument  = _unresolvedPublished;
         for (const SelectionRef &ref : SelectionRefs()) {
@@ -3548,6 +3800,10 @@ namespace KCDC::Features::Prop {
             snapshot.worldRows.push_back(std::move(row));
         }
         _world.ToDocument(snapshot.worldDocument);
+        for (const PlacedClearing &clearing : _grass.Clearings()) {
+            snapshot.grassRows.push_back(GrassRow {clearing.id, clearing.box});
+        }
+        _grass.ToDocument(snapshot.worldDocument);
 
         auto published = std::make_shared<const EditorSnapshot>(std::move(snapshot));
         std::scoped_lock lock(_snapshotMutex);
@@ -3775,6 +4031,7 @@ namespace KCDC::Features::Prop {
             _patrols.RenderOverlay(snapshot, lines);
         }
         RenderEffectMarkers(snapshot);
+        RenderPoseAnchors(snapshot);
         RenderLightMarkers(snapshot);
         RenderSelectionOutline(snapshot, lines);
         Gizmos::GizmosService::Get().SetEditorOverlay(std::move(lines));
@@ -4086,6 +4343,7 @@ namespace KCDC::Features::Prop {
                 row(_keymap.Label(EditorAction::Delete).c_str(), "delete props, take the level's own out");
                 row(_keymap.Label(EditorAction::DropToGround).c_str(), "drop to the ground");
                 row((_keymap.Label(EditorAction::Undo) + " / " + _keymap.Label(EditorAction::Redo)).c_str(), "undo, redo -- and select what changed");
+                row(_keymap.Label(EditorAction::FigureAtCursor).c_str(), "stand a person under the cursor, for scale (Camera tab)");
                 row("Keys tab", "change any of these keys");
                 heading("Selecting many");
                 row("Left drag", "select what is inside a box or lasso on screen");
@@ -4519,6 +4777,135 @@ namespace KCDC::Features::Prop {
         }
     }
 
+    void MapEditor::CollectPoseAnchors(const SDK::Vec3 &centre, float radius, std::vector<PoseAnchor> &anchors) const {
+        const auto within = [&centre, radius](const SDK::Vec3 &point) {
+            const SDK::Vec3 offset {point.x - centre.x, point.y - centre.y, point.z - centre.z};
+            return offset.x * offset.x + offset.y * offset.y + offset.z * offset.z <= radius * radius;
+        };
+
+        // The editor's own, off their blueprints: they stand where the record says.
+        std::vector<PoseAnchor> own;
+        for (const PlacedObject &object : _scene.Objects()) {
+            if (object.kind != PlacedKind::SmartObject || !_layers.Visible(LayerKey({SelectionKind::Placed, object.id}))) {
+                continue;
+            }
+            const Shared::Game::SmartObjectBlueprint *blueprint = Shared::Game::FindSmartObjectBlueprint(object.model);
+            if (blueprint == nullptr) {
+                continue;
+            }
+            own.clear();
+            AppendPoseAnchors(*blueprint, KCDC::Common::ToGlm(object.position), KCDC::Common::ToGlm(object.rotation), object.id, own);
+            for (PoseAnchor &anchor : own) {
+                if (within(anchor.position)) {
+                    anchors.push_back(std::move(anchor));
+                }
+            }
+        }
+
+        // The level's own: entities of the classes the shipped blueprints pose bodies with.
+        auto *entitySystem = SDK::IEntitySystem::GetInstance();
+        if (entitySystem == nullptr) {
+            return;
+        }
+        SDK::IEntityItPtr iterator(entitySystem->GetEntityIterator());
+        if (!iterator) {
+            return;
+        }
+        const std::vector<std::string_view> classes = PoseAnchorClasses();
+        iterator->MoveFirst();
+        while (!iterator->IsEnd()) {
+            SDK::IEntity *entity = iterator->Next();
+            if (entity == nullptr || entity->IsGarbage() || entity->IsHidden()) {
+                continue;
+            }
+            const SDK::Vec3 position = entity->GetWorldPos();
+            if (!within(position)) {
+                continue;
+            }
+            SDK::IEntityClass *entityClass = entity->GetClass();
+            const char *className          = entityClass != nullptr ? entityClass->GetName() : nullptr;
+            if (className == nullptr || std::find(classes.begin(), classes.end(), std::string_view {className}) == classes.end()) {
+                continue;
+            }
+            // One of the editor's own previews was listed off its blueprint.
+            if (_scene.FindByEntityId(entity->GetId()) != 0) {
+                continue;
+            }
+            SDK::Vec3 at {};
+            SDK::Quat rotation {0.0F, 0.0F, 0.0F, 1.0F};
+            SDK::Vec3 scale {};
+            SDK::Matrix34ToTransform(entity->GetWorldTM(), at, rotation, scale);
+            PoseAnchor anchor;
+            anchor.position   = position;
+            anchor.yawDegrees = PoseYawDegrees(KCDC::Common::ToGlm(rotation));
+            const char *name  = entity->GetName();
+            anchor.label      = name != nullptr ? name : "";
+            anchor.partClass  = className;
+            anchors.push_back(std::move(anchor));
+        }
+    }
+
+    const PoseAnchor *MapEditor::PoseAnchorUnderCursor(const EditorSnapshot &snapshot) const {
+        constexpr float kGrabPixels   = 14.0F;
+        const ImGuiViewport *viewport = ImGui::GetMainViewport();
+        const ImVec2 mouse            = ImGui::GetIO().MousePos;
+        const PoseAnchor *nearest     = nullptr;
+        float nearestSquared          = kGrabPixels * kGrabPixels;
+        for (const PoseAnchor &anchor : snapshot.poseAnchors) {
+            float ndcX = 0.0F;
+            float ndcY = 0.0F;
+            if (!KCDC::Features::Camera::ProjectToNdc(snapshot.camera, anchor.position, ndcX, ndcY)) {
+                continue;
+            }
+            const ImVec2 at     = NdcToScreen(*viewport, ndcX, ndcY);
+            const float squared = (mouse.x - at.x) * (mouse.x - at.x) + (mouse.y - at.y) * (mouse.y - at.y);
+            if (squared < nearestSquared) {
+                nearestSquared = squared;
+                nearest        = &anchor;
+            }
+        }
+        return nearest;
+    }
+
+    void MapEditor::RenderPoseAnchors(const EditorSnapshot &snapshot) {
+        if (!snapshot.cameraHeld || snapshot.poseAnchors.empty()) {
+            return;
+        }
+
+        const ImGuiViewport *viewport = ImGui::GetMainViewport();
+        ImDrawList *draw              = ImGui::GetBackgroundDrawList();
+        const PoseAnchor *hovered     = ImGui::GetIO().WantCaptureMouse ? nullptr : PoseAnchorUnderCursor(snapshot);
+
+        for (const PoseAnchor &anchor : snapshot.poseAnchors) {
+            float ndcX = 0.0F;
+            float ndcY = 0.0F;
+            if (!KCDC::Features::Camera::ProjectToNdc(snapshot.camera, anchor.position, ndcX, ndcY)) {
+                continue;
+            }
+            const ImVec2 at     = NdcToScreen(*viewport, ndcX, ndcY);
+            const bool own      = anchor.placedId != 0;
+            const bool lit      = &anchor == hovered;
+            const ImU32 colour  = lit ? IM_COL32(255, 255, 255, 255) : own ? IM_COL32(90, 220, 200, 230) : IM_COL32(150, 190, 255, 200);
+            constexpr float kDot = 5.0F;
+            draw->AddCircleFilled(at, kDot, (colour & 0x00FFFFFFU) | 0x70000000U);
+            draw->AddCircle(at, kDot, colour, 0, lit ? 2.0F : 1.3F);
+
+            // A tick the way a body posed there faces, half a metre long in the world.
+            const float yaw = anchor.yawDegrees * 3.14159265358979F / 180.0F;
+            const SDK::Vec3 ahead {anchor.position.x - std::sin(yaw) * 0.5F, anchor.position.y + std::cos(yaw) * 0.5F, anchor.position.z};
+            float aheadX = 0.0F;
+            float aheadY = 0.0F;
+            if (KCDC::Features::Camera::ProjectToNdc(snapshot.camera, ahead, aheadX, aheadY)) {
+                draw->AddLine(at, NdcToScreen(*viewport, aheadX, aheadY), colour, lit ? 2.0F : 1.3F);
+            }
+
+            if (lit) {
+                const std::string text = anchor.label + "\n" + (own ? anchor.partName : anchor.partClass) + "\n" + _keymap.Label(EditorAction::FigureAtCursor) + " stands the figure here";
+                draw->AddText(ImVec2(at.x + kDot + 5.0F, at.y - 8.0F), colour, text.c_str());
+            }
+        }
+    }
+
     void MapEditor::RenderPlacementOptions() {
         static const char *kPhysicsLabels[] = {"Rigid -- falls and can be pushed", "Static -- solid and immovable", "None -- geometry only, no collision"};
 
@@ -4552,6 +4939,14 @@ namespace KCDC::Features::Prop {
         ImGui::SetNextItemWidth(120.0F);
         ImGui::DragFloat("Fallback distance", &_placementDraft.fallbackDistance, 0.25F, 0.5F, 200.0F, "%.1f m");
         HelpMarker("How far ahead a mesh goes when the cursor points at nothing, e.g. the sky.");
+
+        ImGui::Checkbox("Flatten the level's plants under it", &_placementDraft.flattenPlants);
+        HelpMarker("Takes the level's low plants out from under each object as it is placed, in the same undo step,\nso grass and flowers do not grow through a floor. Exported as level edits.\nGrass merged into the terrain is not an object and stays.");
+        ImGui::SetNextItemWidth(120.0F);
+        ImGui::DragFloat("Plant margin", &_placementDraft.plants.margin, 0.05F, PlantFlattening::kMinMargin, PlantFlattening::kMaxMargin, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetNextItemWidth(120.0F);
+        ImGui::DragFloat("Tallest plant taken", &_placementDraft.plants.maxHeight, 0.05F, PlantFlattening::kMinMaxHeight, PlantFlattening::kMaxMaxHeight, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
+        HelpMarker("The margin widens the object's footprint. Plants taller than the limit, such as trees, stay.\nBoth also apply to Flatten the plants under it in the Object tab.");
     }
 
     void MapEditor::RenderSceneTab(const EditorSnapshot &snapshot) {
@@ -4623,6 +5018,7 @@ namespace KCDC::Features::Prop {
             return row.hidden || row.swapped;
         });
         const std::string deletedLabel = "Deleted (" + std::to_string(deleted) + ")###level_deleted";
+        const std::string grassLabel   = "Grass (" + std::to_string(snapshot.grassRows.size()) + ")###level_grass";
         if (ImGui::BeginTabBar("##level_lists")) {
             if (ImGui::BeginTabItem("Nearby")) {
                 RenderNearbyLevelObjects(snapshot);
@@ -4630,6 +5026,10 @@ namespace KCDC::Features::Prop {
             }
             if (ImGui::BeginTabItem(deletedLabel.c_str())) {
                 RenderLevelEdits(snapshot);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(grassLabel.c_str())) {
+                RenderGrassClearings(snapshot);
                 ImGui::EndTabItem();
             }
             ImGui::EndTabBar();
@@ -4730,6 +5130,52 @@ namespace KCDC::Features::Prop {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::TextDisabled("No matching level edits.");
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    void MapEditor::RenderGrassClearings(const EditorSnapshot &snapshot) {
+        ImGui::Spacing();
+        ImGui::TextWrapped("The tall grass is baked into the terrain, not placed as objects. A clearing takes it out of a box so it does not grow through a floor: select what you placed and use Clear the grass under it in the Object tab. Herbs a player can gather stay.");
+        ImGui::SetNextItemWidth(120.0F);
+        ImGui::DragFloat("Margin", &_grassDraft.margin, 0.05F, GrassClearingOptions::kMinMargin, GrassClearingOptions::kMaxMargin, "%.2f m", ImGuiSliderFlags_AlwaysClamp);
+        HelpMarker("Metres added around an object's footprint when the grass under it is cleared.");
+
+        ImGui::BeginDisabled(snapshot.grassRows.empty());
+        if (ImGui::Button("Give all the grass back", ImVec2(-1.0F, 0.0F))) {
+            Command command;
+            command.kind = CommandKind::RestoreGrass;
+            Queue(std::move(command));
+        }
+        ImGui::EndDisabled();
+
+        if (ImGui::BeginTable("##kcdc_editor_grass", 3, ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp, ImVec2(0.0F, std::max(ImGui::GetContentRegionAvail().y, 160.0F)))) {
+            ImGui::TableSetupScrollFreeze(0, 1);
+            ImGui::TableSetupColumn("Clearing", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 110.0F);
+            ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 80.0F);
+            ImGui::TableHeadersRow();
+            for (const GrassRow &row : snapshot.grassRows) {
+                ImGui::PushID(static_cast<int>(row.id) + 0x50000000);
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%.1f, %.1f, %.1f", row.box.center.x, row.box.center.y, row.box.center.z);
+                ImGui::TableNextColumn();
+                ImGui::Text("%.1f x %.1f m", row.box.halfSize.x * 2.0F, row.box.halfSize.y * 2.0F);
+                ImGui::TableNextColumn();
+                if (ImGui::SmallButton("Give back")) {
+                    Command command;
+                    command.kind = CommandKind::RestoreGrass;
+                    command.id   = row.id;
+                    Queue(std::move(command));
+                }
+                ImGui::PopID();
+            }
+            if (snapshot.grassRows.empty()) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextDisabled("No clearings.");
             }
             ImGui::EndTable();
         }
@@ -5002,6 +5448,26 @@ namespace KCDC::Features::Prop {
                 Queue(std::move(command));
             }
 
+            if (ImGui::Button("Flatten the plants under it", ImVec2(-1.0F, 0.0F))) {
+                Command command;
+                command.kind   = CommandKind::FlattenPlants;
+                command.value  = _placementDraft.plants.margin;
+                command.value2 = _placementDraft.plants.maxHeight;
+                Queue(std::move(command));
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                ImGui::SetTooltip("Takes the level's low plants out from under every selected object you placed, as one undo step.\nThe margin and the tallest plant taken are set under Placement in the Library tab.\nGrass merged into the terrain is not an object and stays.");
+            }
+            if (ImGui::Button("Clear the grass under it", ImVec2(-1.0F, 0.0F))) {
+                Command command;
+                command.kind  = CommandKind::ClearGrass;
+                command.value = _grassDraft.margin;
+                Queue(std::move(command));
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal)) {
+                ImGui::SetTooltip("Takes the tall grass baked into the terrain out from under every selected object you placed, as one undo step.\nThe margin, and every clearing made, are under Level > Grass. Saved and exported as level edits.\nHerbs a player can gather stay.");
+            }
+
             if (DangerButton("Delete [Del]", ImVec2(-1.0F, 0.0F))) {
                 Command command;
                 command.kind = CommandKind::Remove;
@@ -5173,6 +5639,24 @@ namespace KCDC::Features::Prop {
             optionalFraction("Own condition", "condition", "Off: the class's own. On: 0 is filthy, 1 is clean.");
         }
         else if (selection.placedKind == PlacedKind::SmartObject) {
+            const bool takesBare = WorldObjectTakesBare(selection.placedKind, selection.model);
+            bool bare            = WorldObjectStandsBare(_settingsDraft);
+            ImGui::BeginDisabled(!takesBare);
+            if (ImGui::Checkbox("Only the pose, without its furniture", &bare)) {
+                if (bare) {
+                    _settingsDraft["bare"] = true;
+                }
+                else {
+                    _settingsDraft.erase("bare");
+                }
+                commit = true;
+            }
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal | ImGuiHoveredFlags_AllowWhenDisabled)) {
+                ImGui::SetTooltip("%s",
+                    takesBare ? "Leaves the blueprint's own furniture out and keeps what the game sits, lays or works a body at,\nso a prop of your choice can stand there instead: place the prop, then this on it.\nThe pose anchors show where the body goes. The export carries it."
+                              : "This blueprint's furniture is one of its own entities, or it has none:\nthere is nothing to leave out.");
+            }
             ImGui::TextDisabled("Sits, sleeps, gambles or crafts as the level's own does once a server loads the export.");
         }
 
@@ -5758,6 +6242,60 @@ namespace KCDC::Features::Prop {
         else {
             ImGui::TextDisabled("No local player in this level.");
         }
+
+        ImGui::SeparatorText("Scale figure");
+        ImGui::TextWrapped("Stand a person in the scene to judge its proportions. The figure is not saved or exported, and stays while you walk the scene with F7.");
+        if (ImGui::BeginCombo("Figure", _figureRole.c_str())) {
+            for (const Shared::Game::NpcRoleEntry &entry : Shared::Game::g_NpcRoles) {
+                if (ImGui::Selectable(entry.name.data(), _figureRole == entry.name)) {
+                    _figureRole = entry.name;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::BeginDisabled(!snapshot.cameraHeld);
+        if (ImGui::Button("Stand it in the middle of the view", ImVec2(-1.0F, 0.0F))) {
+            Command command;
+            command.kind        = CommandKind::Figure;
+            command.enable      = true;
+            command.aimed       = true;
+            command.previewRole = _figureRole;
+            Queue(std::move(command));
+        }
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("Key %s stands it under the cursor.", _keymap.Label(EditorAction::FigureAtCursor).c_str());
+        ImGui::BeginDisabled(!snapshot.figureActive);
+        if (ImGui::Button("Look from its eyes", ImVec2(-1.0F, 0.0F))) {
+            Command command;
+            command.kind     = CommandKind::CameraView;
+            command.position = FigureEyePoint(snapshot.figurePosition, snapshot.figureYaw);
+            command.value    = snapshot.figureYaw;
+            command.value2   = 0.0F;
+            Queue(std::move(command));
+        }
+        if (ImGui::Button("Take the figure away", ImVec2(-1.0F, 0.0F))) {
+            Command command;
+            command.kind   = CommandKind::Figure;
+            command.enable = false;
+            Queue(std::move(command));
+        }
+        ImGui::EndDisabled();
+        ImGui::TextWrapped("%s", snapshot.figureStatus.c_str());
+
+        ImGui::SeparatorText("Pose anchors");
+        bool anchorsShown = _poseAnchorsShown.load(std::memory_order_relaxed);
+        if (ImGui::Checkbox("Show where the game poses a body", &anchorsShown)) {
+            _poseAnchorsShown.store(anchorsShown, std::memory_order_relaxed);
+        }
+        HelpMarker("A dot with a tick for each place a body sits, lies or works at, facing the way the tick points:\ngreen for the seats, beds and stations you placed, blue for the level's own.\nRest the cursor on one to read what it is.");
+        float anchorReach = _poseAnchorReach.load(std::memory_order_relaxed);
+        ImGui::BeginDisabled(!anchorsShown);
+        ImGui::SetNextItemWidth(160.0F);
+        if (ImGui::SliderFloat("Anchor reach", &anchorReach, 5.0F, 150.0F, "%.0f m", ImGuiSliderFlags_AlwaysClamp)) {
+            _poseAnchorReach.store(anchorReach, std::memory_order_relaxed);
+        }
+        ImGui::EndDisabled();
+        ImGui::TextDisabled("%zu in reach", snapshot.poseAnchors.size());
     }
 
     void MapEditor::SyncEditDraft(const EditorSnapshot &snapshot) {
@@ -6167,6 +6705,23 @@ namespace KCDC::Features::Prop {
             }
             if (_keymap.Pressed(EditorAction::ToggleAxes)) {
                 _viewport.localSpace = !_viewport.localSpace;
+            }
+            if (overWorld && _keymap.Pressed(EditorAction::FigureAtCursor)) {
+                Command command;
+                command.kind        = CommandKind::Figure;
+                command.enable      = true;
+                command.previewRole = _figureRole;
+                if (const PoseAnchor *anchor = PoseAnchorUnderCursor(snapshot)) {
+                    // On an anchor it stands where the body is posed, facing as it faces.
+                    command.position = anchor->position;
+                    command.value    = anchor->yawDegrees;
+                }
+                else {
+                    command.aimed = true;
+                    command.ndcX  = ndcX;
+                    command.ndcY  = ndcY;
+                }
+                Queue(std::move(command));
             }
             if (_keymap.Pressed(EditorAction::ToggleSnap)) {
                 bool &snapping = _patrols.IsTabVisible() || (_areas.IsTabVisible() && _areas.IsEditingHandle()) ? _viewport.snapTranslate : _operation == 1 ? _viewport.snapRotate : _operation == 2 ? _viewport.snapScale : _viewport.snapTranslate;

@@ -60,7 +60,8 @@ namespace KCDC::Features::Prop {
         }
         Json PlacementSchema() {
             return Object({{"physics", Enum({"rigid", "static", "none"})}, {"alignToSurface", Boolean()}, {"snapToGrid", Boolean()}, {"gridStep", Number(0.1, 50)}, {"randomYaw", Boolean()}, {"randomScale", Boolean()}, {"scaleMin", Number(0.05, 20)},
-                {"scaleMax", Number(0.05, 20)}, {"heightOffset", Number(-20, 20)}, {"fallbackDistance", Number(0.5, 200)}, {"effectTuning", TuningSchema()}, {"oneShotRepeat", Number(0, 30)}});
+                {"scaleMax", Number(0.05, 20)}, {"heightOffset", Number(-20, 20)}, {"fallbackDistance", Number(0.5, 200)}, {"effectTuning", TuningSchema()}, {"oneShotRepeat", Number(0, 30)},
+                {"flattenPlants", Boolean()}, {"plantMargin", Number(PlantFlattening::kMinMargin, PlantFlattening::kMaxMargin)}, {"plantMaxHeight", Number(PlantFlattening::kMinMaxHeight, PlantFlattening::kMaxMaxHeight)}});
         }
         Json ViewSchema() {
             return Object({{"name", Text(256)}, {"position", VectorSchema()}, {"yawDegrees", Number(-360, 360)}, {"pitchDegrees", Number(-89, 89)}});
@@ -85,7 +86,8 @@ namespace KCDC::Features::Prop {
         }
         Json Placement(const PlacementOptions &p) {
             return {{"physics", KCDC::Common::Spawn::PropPhysicsToString(p.physics)}, {"alignToSurface", p.alignToSurface}, {"snapToGrid", p.snapToGrid}, {"gridStep", p.gridStep}, {"randomYaw", p.randomYaw}, {"randomScale", p.randomScale}, {"scaleMin", p.scaleMin},
-                {"scaleMax", p.scaleMax}, {"heightOffset", p.heightOffset}, {"fallbackDistance", p.fallbackDistance}, {"effectTuning", Tuning(p.effectTuning)}, {"oneShotRepeat", p.oneShotRepeat}};
+                {"scaleMax", p.scaleMax}, {"heightOffset", p.heightOffset}, {"fallbackDistance", p.fallbackDistance}, {"effectTuning", Tuning(p.effectTuning)}, {"oneShotRepeat", p.oneShotRepeat},
+                {"flattenPlants", p.flattenPlants}, {"plantMargin", p.plants.margin}, {"plantMaxHeight", p.plants.maxHeight}};
         }
         Json Asset(const AssetLibraryItem &item) {
             std::string model;
@@ -244,7 +246,13 @@ namespace KCDC::Features::Prop {
         add("wb_level_areas_query", "Query compiled level areas and bounds; level defaults to the current level.", Object(properties), true);
         add("wb_level_area_get", "Read a compiled level area including polygon, union membership, labels and door links.", Object({{"id", Text(18)}, {"level", Text(128)}}, {"id"}), true);
         add("wb_area_copy_from_level", "Copy a level area or union into editable polygon areas using the editor's existing conversion.", Object({{"id", Text(18)}, {"prefix", Text(96)}, {"group", Text(256, false)}}, {"id", "prefix"}), false);
-        add("wb_npc_roles_query", "Discover compiled NPC roles for patrol preview, including soul, class, outfit and character metadata.", Object(PageProperties()), true);
+        add("wb_npc_roles_query", "Discover compiled NPC roles for patrol preview and the scale figure, including soul, class, outfit and character metadata.", Object(PageProperties()), true);
+        add("wb_figure_place",
+            "Stand the scale figure, a temporary person of a catalog NPC role, to judge a scene's proportions by. Give either `position` (its feet, `[x, y, z]` in world metres) with an optional `yaw` in degrees as wb_camera_get reads it, counter-clockwise from +Y, or `aim`, a screen point in normalized device "
+            "coordinates: it then stands on the surface there, facing the camera. It replaces the figure standing and stops a patrol preview. The figure is not saved or exported.",
+            Object({{"role", Text(128)}, {"position", Array(Number(-65536, 65536), 3, 3)}, {"yaw", Number(-36000, 36000)}, {"aim", Array(Number(-1, 1), 2, 2)}}, {"role"}), false);
+        add("wb_figure_get", "Read the scale figure: whether one was asked for and stands, its role, feet position, yaw, the point the eye view looks from, and status.", Object(), true);
+        add("wb_figure_remove", "Take the scale figure away through the game command queue.", Object(), false);
         add("wb_patrols_query", "List authored patrol routes.", Object(PageProperties()), true);
         add("wb_patrol_get", "Read an authored patrol route.", Object({{"id", Text(128)}}, {"id"}), true);
         add("wb_patrol_create", "Create a validated patrol route.", Object({{"route", RouteSchema()}}, {"route"}), false);
@@ -435,6 +443,9 @@ namespace KCDC::Features::Prop {
                 draft.heightOffset     = value.at("heightOffset").get<float>();
                 draft.fallbackDistance = value.at("fallbackDistance").get<float>();
                 draft.oneShotRepeat    = value.at("oneShotRepeat").get<float>();
+                draft.flattenPlants    = value.at("flattenPlants").get<bool>();
+                draft.plants.margin    = value.at("plantMargin").get<float>();
+                draft.plants.maxHeight = value.at("plantMaxHeight").get<float>();
                 draft.effectTuning     = Shared::WorldBuilder::ReadTuning(value.at("effectTuning"));
                 Require(draft.scaleMin <= draft.scaleMax, "scaleMin must not exceed scaleMax.");
                 Require(draft.effectTuning.IsSane(), "Invalid effect tuning.");
@@ -628,6 +639,39 @@ namespace KCDC::Features::Prop {
                 roles.push_back({{"name", role.name}, {"soulGuid", role.soulGuid}, {"actorClass", role.actorClass}, {"clothingPresetGuid", role.clothingPresetGuid}, {"character", role.character}});
             }
             result = Page(roles, args);
+            return true;
+        }
+        if (name == "wb_figure_get") {
+            // Positions as `[x, y, z]`, the way wb_camera_set spells one, so the eye point feeds it as it is.
+            const SDK::Vec3 eye = FigureEyePoint(snapshot.figurePosition, snapshot.figureYaw);
+            result              = {{"active", snapshot.figureActive}, {"standing", snapshot.figureStanding}, {"role", snapshot.figureRole}, {"status", snapshot.figureStatus},
+                {"position", snapshot.figureActive ? Json::array({snapshot.figurePosition.x, snapshot.figurePosition.y, snapshot.figurePosition.z}) : Json(nullptr)}, {"yaw", snapshot.figureActive ? Json(snapshot.figureYaw) : Json(nullptr)},
+                {"eyePoint", snapshot.figureActive ? Json::array({eye.x, eye.y, eye.z}) : Json(nullptr)}};
+            return true;
+        }
+        if (name == "wb_figure_place" || name == "wb_figure_remove") {
+            MapEditor::Command command;
+            command.kind   = MapEditor::CommandKind::Figure;
+            command.enable = name == "wb_figure_place";
+            if (command.enable) {
+                Require(snapshot.cameraHeld, "The editor camera must be active to stand the figure.");
+                command.previewRole = args.at("role").get<std::string>();
+                Require(Shared::Game::FindNpcRole(command.previewRole) != nullptr, "Unknown NPC role; list them with wb_npc_roles_query.");
+                Require(args.contains("position") != args.contains("aim"), "Give either position or aim.");
+                if (args.contains("aim")) {
+                    Require(!args.contains("yaw"), "A figure stood by aim faces the camera; yaw applies to position.");
+                    command.aimed = true;
+                    command.ndcX  = args.at("aim").at(0).get<float>();
+                    command.ndcY  = args.at("aim").at(1).get<float>();
+                }
+                else {
+                    const Json &feet = args.at("position");
+                    command.position = SDK::Vec3 {feet.at(0).get<float>(), feet.at(1).get<float>(), feet.at(2).get<float>()};
+                    command.value    = args.value("yaw", 0.0F);
+                }
+            }
+            editor.Queue(std::move(command));
+            result = {{"queued", true}};
             return true;
         }
         if (name == "wb_patrols_query") {

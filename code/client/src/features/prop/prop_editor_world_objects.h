@@ -55,6 +55,20 @@ namespace KCDC::Features::Prop {
      */
     bool NormalizeWorldObject(PlacedKind kind, std::string &model, nlohmann::json &settings, std::string &error);
 
+    /**
+     * Whether a placed smart object's settings ask for it `bare`: the place
+     * a body takes, or the station, without the blueprint's furniture, for a
+     * prop of the mapper's own choosing to stand there. False for settings
+     * of any other shape.
+     */
+    bool WorldObjectStandsBare(const nlohmann::json &settings);
+
+    /**
+     * Whether `bare` is a setting a placed object of this kind and model
+     * takes: a smart object whose blueprint has furniture to leave out.
+     */
+    bool WorldObjectTakesBare(PlacedKind kind, const std::string &model);
+
     /** The entry a kind's document array carries, in the format `Door.spawn`, `SmartObject.spawn` and a world resource's `items` take. */
     nlohmann::json WorldObjectToJson(PlacedKind kind, const std::string &model, const nlohmann::json &settings, const SDK::Vec3 &position, const SDK::Quat &rotation);
 

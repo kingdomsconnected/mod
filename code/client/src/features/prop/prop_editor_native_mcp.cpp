@@ -94,13 +94,14 @@ namespace KCDC::Features::Prop {
             {{"query", Text()}, {"kind", {{"type", "string"}, {"enum", {"all", "prop", "effect", "light", "world"}}}}, {"offset", {{"type", "integer"}, {"minimum", 0}}}, {"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 500}}}});
         add("wb_object_get", "Read an object using its opaque ID. Returns an operation.", true, {{"id", Text()}}, {"id"});
         // Every field a door, smart object or item takes; each kind reads its own and refuses what it does not know the value of.
-        const auto settings = Object({{"name", Text(64)}, {"locked", boolean}, {"lock", {{"type", "string"}, {"enum", {"none", "bolt", "boltAndKey", "key"}}}}, {"lockpickable", boolean}, {"lockDifficulty", Number(0, 1)}, {"keyItem", Text(36)},
+        const auto settings = Object({{"name", Text(64)}, {"bare", boolean}, {"locked", boolean}, {"lock", {{"type", "string"}, {"enum", {"none", "bolt", "boltAndKey", "key"}}}}, {"lockpickable", boolean}, {"lockDifficulty", Number(0, 1)}, {"keyItem", Text(36)},
             {"amount", {{"type", "integer"}, {"minimum", 1}, {"maximum", 10000}}}, {"quality", {{"type", "integer"}, {"minimum", 0}, {"maximum", 255}}}, {"health", Number(0, 1)}, {"condition", Number(0, 1)}});
         add("wb_props_create",
             "Place a catalog prop at an explicit pose, or a door, smart object or item by the library key wb_assets_search lists for it: `door:<leaf path or stem>`, `smart:<blueprint>`, `item:<class GUID or name>`. Those take `settings` -- a door's name, locked, lock "
-            "(none, bolt, boltAndKey, key), lockpickable, lockDifficulty and keyItem; a smart object's name; an item's name, amount, quality, health and condition -- and no scale or physics: the server builds the real one from the export. Returns its opaque ID through an operation.",
+            "(none, bolt, boltAndKey, key), lockpickable, lockDifficulty and keyItem; a smart object's name and bare (true leaves the blueprint's furniture out and keeps the seat, bed or station, for a prop to stand there; refused for a blueprint with no furniture of its own to leave out); an item's name, amount, quality, health and condition -- and no scale or physics: the server builds the real one from the export. Returns its opaque ID through an operation.",
             false, {{"model", Text(1024)}, {"position", Vector(3)}, {"rotation", Vector(4, -1, 1)}, {"scale", Vector(3, 0.01F, 100)}, {"physics", physics}, {"settings", settings}, {"group", Text()}}, {"model", "position"});
-        add("wb_object_settings_update", "Replace a placed door's, smart object's or item's settings, checked as the server will load them, as one undo step. Omitted fields take their defaults.", false, {{"id", Text()}, {"settings", settings}}, {"id", "settings"});
+        add("wb_object_settings_update", "Replace a placed door's, smart object's or item's settings, checked as the server will load them, as one undo step. Omitted fields take their defaults. Changing a smart object's bare rebuilds its preview with or without its furniture.",
+            false, {{"id", Text()}, {"settings", settings}}, {"id", "settings"});
         add("wb_effects_create", "Place a catalog particle effect.", false, {{"effect", Text(1024)}, {"position", Vector(3)}, {"rotation", Vector(4, -1, 1)}, {"tuning", tuning}, {"group", Text()}}, {"effect", "position"});
         add("wb_lights_create", "Place a standalone point light. Color is RGB from 0 to 1, intensity is a diffuse multiplier, radius is metres, and castShadows defaults to false.", false,
             {{"position", Vector(3, -16384, 16384)}, {"color", Vector(3, 0, 1)}, {"intensity", Number(0, 100)}, {"radius", Number(0.1F, 100)}, {"castShadows", boolean}, {"group", Text()}}, {"position"});
@@ -113,6 +114,10 @@ namespace KCDC::Features::Prop {
             add(name, "Apply the named editor action to explicit object IDs. Native work completes asynchronously.", false, {{"ids", ids}}, {"ids"});
         }
         add("wb_objects_convert", "Replace adopted level objects with editable static props of the same catalog mesh: each original is hidden and a prop placed at its pose, as one undo step. Fails when any object has no catalog mesh.", false, {{"ids", ids}}, {"ids"});
+        add("wb_plants_flatten",
+            "Take the level's low plants out of the world under placed props, doors, smart objects or items: every plant the level placed as its own object, rooted in an object's footprint grown by `margin` metres (0.25 by default) and no taller than `maxHeight` "
+            "(3 by default). One undo step; the plants become hidden level edits, which the export carries. The tall grass is merged into the terrain, is not an object and stays. Returns how many went and their IDs.",
+            false, {{"ids", ids}, {"margin", Number(PlantFlattening::kMinMargin, PlantFlattening::kMaxMargin)}, {"maxHeight", Number(PlantFlattening::kMinMaxHeight, PlantFlattening::kMaxMaxHeight)}}, {"ids"});
         add("wb_prop_physics_set", "Change a prop's physics and rebuild its native entity.", false, {{"id", Text()}, {"physics", physics}}, {"id", "physics"});
         add("wb_prop_collision_rebuild", "Rebuild a prop's collision from its current scale.", false, {{"id", Text()}}, {"id"});
         add("wb_selection_get", "Read native object, authored area and patrol selections.", true);
@@ -150,10 +155,25 @@ namespace KCDC::Features::Prop {
         add("wb_level_object_update", "Adopt a browsed object and move, scale, rotate, hide or swap it with editor history. `model` stands an asset-library mesh in its place, collision included; an empty string takes the swap back.", false,
             {{"id", Text()}, {"position", Vector(3)}, {"rotation", Vector(4, -1, 1)}, {"scale", Vector(3, 0.01F, 100)}, {"hidden", boolean}, {"model", {{"type", "string"}, {"maxLength", 260}}}}, {"id"});
         add("wb_level_edits_restore", "Restore explicit adopted level objects or all edits. Restoring releases their IDs.", false, {{"ids", ids}, {"all", boolean}});
+        add("wb_grass_clear",
+            "Take the tall grass baked into the terrain out of the world: under placed props, doors, smart objects or items (`ids`, each footprint grown by `margin` metres, 0.5 by default, and turned with an upright object), in an explicit upright box (`center`, `halfSize` "
+            "along its two ground axes and up, `yaw` in degrees, counter-clockwise from above), or both. The grass is not objects, so no level-object tool reaches it; plants a player can gather stay. One undo step; each clearing is saved and exported as a `grass` entry of "
+            "the map's `world` array. Returns the clearings made, with how many plants went from the sectors streamed in.",
+            false, {{"ids", ids}, {"margin", Number(GrassClearingOptions::kMinMargin, GrassClearingOptions::kMaxMargin)}, {"center", Vector(3)}, {"halfSize", Vector(3, Shared::Game::GrassClearing::kMinHalfSize, Shared::Game::GrassClearing::kMaxHalfSize)}, {"yaw", Number(-360, 360)}});
+        add("wb_grass_clearings_list", "List the clearings standing in the terrain's grass: each one's ID, centre, half sizes and yaw in degrees.", true);
+        add("wb_grass_restore", "Give the grass of explicit clearings back, or of all of them, as one undo step. Restoring releases their IDs.", false, {{"ids", ids}, {"all", boolean}});
         add("wb_camera_get", "Read the editor camera pose and lens.", true);
         add("wb_camera_set", "Set camera position, angles, movement speed or field of view.", false, {{"position", Vector(3)}, {"yaw", Number(-36000, 36000)}, {"pitch", Number(-89, 89)}, {"fov", Number(20, 140)}, {"speed", Number(0.05F, 400)}});
         add("wb_camera_frame", "Frame a world position or current native selection.", false, {{"position", Vector(3)}, {"distance", Number(0.1F, 10000)}});
         add("wb_raycast", "Cast a bounded ray using the editor's native picking system.", true, {{"origin", Vector(3)}, {"direction", Vector(3, -1, 1)}, {"distance", Number(0.01F, 5000)}}, {"origin", "direction"});
+        add("wb_pick_at",
+            "What a viewport click at a screen point in normalized device coordinates would select, without selecting it. A solid object is found where the ray strikes its collision; an object without collision by its oriented box in front of that surface. `kind` is prop, "
+            "effect, light, level, terrain or none; `by` is collision or bounds; `id` is set for a prop, effect, light or an adopted level object.",
+            true, {{"aim", ndcPoint}}, {"aim"});
+        add("wb_pose_anchors_query",
+            "List where the game poses a body within `radius` metres (40 by default) of `center` (the editor camera by default): each part of a placed smart object that carries a pose helper, and the level's own entities of those classes. Each has `position`, `yaw` in "
+            "degrees as wb_camera_get reads it, `label` (the helper class, or a level entity's name), `class`, `part`, and `objectId`, the placed smart object's ID or null for the level's own. Pass a position and yaw to wb_figure_place to stand the scale figure there.",
+            true, {{"center", Vector(3)}, {"radius", Number(1, 150)}});
         add("wb_ground_probe", "Probe terrain and native collision below explicit positions.", true, {{"points", {{"type", "array"}, {"minItems", 1}, {"maxItems", 256}, {"items", Vector(3)}}}}, {"points"});
         add("wb_project_points", "Project world points into normalized screen coordinates through the active native camera.", true, {{"points", {{"type", "array"}, {"minItems", 1}, {"maxItems", 256}, {"items", Vector(3)}}}}, {"points"});
         for (const char *name : {"wb_operation_get", "wb_operation_wait"}) {
@@ -305,6 +325,9 @@ namespace KCDC::Features::Prop {
                         {"collisionRebuildFailed", object.collisionRebuildFailed}});
                     if (object.kind != PlacedKind::Prop) {
                         result.update({{"key", WorldObjectKey(object.kind, object.model)}, {"settings", object.settings}, {"built", object.entityId != 0}});
+                    }
+                    if (object.kind == PlacedKind::SmartObject) {
+                        result["takesBare"] = WorldObjectTakesBare(object.kind, object.model);
                     }
                 }
                 else if (item.kind == SelectionKind::Light) {
@@ -752,6 +775,39 @@ namespace KCDC::Features::Prop {
                 }
                 result = describe(target);
             }
+            else if (name == "wb_plants_flatten") {
+                PlantFlattening options;
+                options.margin    = args.value("margin", options.margin);
+                options.maxHeight = args.value("maxHeight", options.maxHeight);
+                std::vector<SelectionRef> targets;
+                std::unordered_set<std::string> seen;
+                for (const auto &value : args.at("ids")) {
+                    if (!seen.insert(value.get<std::string>()).second) {
+                        throw std::runtime_error("Object IDs must be unique");
+                    }
+                    targets.push_back(ref(value));
+                    if (targets.back().kind != SelectionKind::Placed) {
+                        throw std::runtime_error("Plants are flattened under placed props, doors, smart objects and items only; nothing was changed");
+                    }
+                }
+                const auto *defaultLayer = editor._layers.Find("default");
+                if (!defaultLayer->visible || defaultLayer->locked) {
+                    throw std::runtime_error("Default layer is hidden or locked.");
+                }
+                HistoryStep step;
+                step.label = "MCP flatten plants";
+                for (const SelectionRef &target : targets) {
+                    editor.FlattenPlantsUnder(target.id, options, step);
+                }
+                auto flattenedIds = nlohmann::json::array();
+                for (const HistoryAction &action : step.actions) {
+                    flattenedIds.push_back(id(SelectionKind::World, action.id));
+                }
+                if (!step.actions.empty()) {
+                    editor._history.Record(std::move(step), &editor._layers);
+                }
+                result = {{"flattened", flattenedIds.size()}, {"ids", std::move(flattenedIds)}};
+            }
             else if (name == "wb_select_similar" || name == "wb_select_in_radius" || name == "wb_select_brush" || name == "wb_select_in_rect" || name == "wb_select_in_polygon" || name == "wb_select_in_area") {
                 SelectionQuery query;
                 std::string error;
@@ -924,8 +980,8 @@ namespace KCDC::Features::Prop {
                 std::string label;
                 std::vector<SelectionRef> touched;
                 const auto authoredSerial = editor._history.AuthoredRestoreSerial();
-                const bool changed        = name == "wb_history_undo" ? editor._history.Undo(editor._scene, editor._world, editor._effects, editor._lights, label, &editor._layers, &touched)
-                                                                      : editor._history.Redo(editor._scene, editor._world, editor._effects, editor._lights, label, &editor._layers, &touched);
+                const bool changed        = name == "wb_history_undo" ? editor._history.Undo(editor._scene, editor._world, editor._effects, editor._lights, editor._grass, label, &editor._layers, &touched)
+                                                                      : editor._history.Redo(editor._scene, editor._world, editor._effects, editor._lights, editor._grass, label, &editor._layers, &touched);
                 editor.SelectTouched(touched);
                 if (editor._history.AuthoredRestoreSerial() != authoredSerial) {
                     editor._patrolPreview.Stop();
@@ -1070,6 +1126,114 @@ namespace KCDC::Features::Prop {
                     result = describe(target);
                 }
             }
+            else if (name == "wb_grass_clear" || name == "wb_grass_clearings_list" || name == "wb_grass_restore") {
+                const std::string grassPrefix = prefix + "grass/";
+                const auto describeClearing   = [&](const PlacedClearing &clearing) {
+                    return nlohmann::json {{"id", grassPrefix + std::to_string(clearing.id)}, {"center", {clearing.box.center.x, clearing.box.center.y, clearing.box.center.z}}, {"halfSize", {clearing.box.halfSize.x, clearing.box.halfSize.y, clearing.box.halfSize.z}}, {"yaw", clearing.box.yawDegrees}};
+                };
+                if (name == "wb_grass_clearings_list") {
+                    auto clearings = nlohmann::json::array();
+                    for (const PlacedClearing &clearing : editor._grass.Clearings()) {
+                        clearings.push_back(describeClearing(clearing));
+                    }
+                    result = {{"count", clearings.size()}, {"clearings", std::move(clearings)}};
+                }
+                else if (name == "wb_grass_clear") {
+                    const bool hasBox = args.contains("center") || args.contains("halfSize") || args.contains("yaw");
+                    if (!args.contains("ids") && !hasBox) {
+                        throw std::runtime_error("Specify ids, or a box as center and halfSize");
+                    }
+                    GrassClearingOptions options;
+                    options.margin = args.value("margin", options.margin);
+                    Shared::Game::GrassClearing box;
+                    if (hasBox) {
+                        if (!args.contains("center") || !args.contains("halfSize")) {
+                            throw std::runtime_error("A box needs both center and halfSize");
+                        }
+                        box.center   = glm::vec3 {args["center"][0].get<float>(), args["center"][1].get<float>(), args["center"][2].get<float>()};
+                        box.halfSize = glm::vec3 {args["halfSize"][0].get<float>(), args["halfSize"][1].get<float>(), args["halfSize"][2].get<float>()};
+                        box.yawDegrees = args.value("yaw", 0.0F);
+                        if (!box.IsSane()) {
+                            throw std::runtime_error("The box is not finite or within its limits");
+                        }
+                    }
+                    // Every ID is read before anything is cleared, so a bad one changes nothing.
+                    std::vector<SelectionRef> targets;
+                    std::unordered_set<std::string> seen;
+                    if (args.contains("ids")) {
+                        for (const auto &value : args["ids"]) {
+                            if (!seen.insert(value.get<std::string>()).second) {
+                                throw std::runtime_error("Object IDs must be unique");
+                            }
+                            targets.push_back(ref(value));
+                            if (targets.back().kind != SelectionKind::Placed) {
+                                throw std::runtime_error("Grass is cleared under placed props, doors, smart objects and items only; nothing was changed");
+                            }
+                        }
+                    }
+                    HistoryStep step;
+                    step.label     = "MCP clear the grass";
+                    auto clearings = nlohmann::json::array();
+                    const auto add = [&](std::uint64_t clearingId, const KCDC::Features::Grass::GrassChange &change) {
+                        if (clearingId != 0) {
+                            auto entry       = describeClearing(*editor._grass.Find(clearingId));
+                            entry["sectors"] = change.sectors;
+                            entry["plants"]  = change.plants;
+                            clearings.push_back(std::move(entry));
+                        }
+                    };
+                    for (const SelectionRef &target : targets) {
+                        KCDC::Features::Grass::GrassChange change;
+                        add(editor.ClearGrassUnder(target.id, options, step, change), change);
+                    }
+                    if (hasBox) {
+                        KCDC::Features::Grass::GrassChange change;
+                        add(editor.ClearGrassIn(box, step, change), change);
+                    }
+                    if (!step.actions.empty()) {
+                        editor._history.Record(std::move(step), &editor._layers);
+                    }
+                    result = {{"cleared", clearings.size()}, {"clearings", std::move(clearings)}};
+                }
+                else {
+                    if (args.value("all", false) && args.contains("ids")) {
+                        throw std::runtime_error("Specify either ids or all=true, not both");
+                    }
+                    std::vector<std::uint64_t> targets;
+                    if (args.value("all", false)) {
+                        for (const PlacedClearing &clearing : editor._grass.Clearings()) {
+                            targets.push_back(clearing.id);
+                        }
+                    }
+                    else {
+                        if (!args.contains("ids")) {
+                            throw std::runtime_error("Specify ids or all=true");
+                        }
+                        for (const auto &value : args["ids"]) {
+                            const std::string text = value.get<std::string>();
+                            std::uint64_t number   = 0;
+                            const auto parsed      = text.starts_with(grassPrefix) ? std::from_chars(text.data() + grassPrefix.size(), text.data() + text.size(), number) : std::from_chars_result {text.data(), std::errc::invalid_argument};
+                            if (parsed.ec != std::errc {} || parsed.ptr != text.data() + text.size() || editor._grass.Find(number) == nullptr) {
+                                throw std::runtime_error("Unknown clearing ID; nothing was changed");
+                            }
+                            if (std::find(targets.begin(), targets.end(), number) != targets.end()) {
+                                throw std::runtime_error("Clearing IDs must be unique");
+                            }
+                            targets.push_back(number);
+                        }
+                    }
+                    HistoryStep step;
+                    step.label = "MCP give the grass back";
+                    for (const std::uint64_t clearingId : targets) {
+                        editor.RestoreGrass(clearingId, step);
+                    }
+                    const std::size_t restored = step.actions.size();
+                    if (restored != 0) {
+                        editor._history.Record(std::move(step), &editor._layers);
+                    }
+                    result = {{"restored", restored}};
+                }
+            }
             else if (name == "wb_level_edits_restore") {
                 if (args.value("all", false) && args.contains("ids")) {
                     throw std::runtime_error("Specify either ids or all=true, not both");
@@ -1176,6 +1340,62 @@ namespace KCDC::Features::Prop {
                 const bool hit = pick.kind != WorldPickKind::None;
                 result         = {{"hit", hit}, {"kind", WorldPickKindToString(pick.kind)}, {"position", hit ? Vec(pick.hitPoint) : nlohmann::json(nullptr)}, {"distance", hit ? nlohmann::json(pick.distance) : nlohmann::json(nullptr)}, {"name", label}, {"detail", detail}};
             }
+            else if (name == "wb_pick_at") {
+                if (!editor._camera.IsActive()) {
+                    throw std::runtime_error("Open the editor and wait for its camera to become active");
+                }
+                const MapEditor::PickResult picked = editor.PickThrough(Camera::RayThroughNdc(editor._camera.GetPose(), args.at("aim").at(0).get<float>(), args.at("aim").at(1).get<float>()), PickEffort::Thorough);
+                result                             = {{"hit", false}, {"kind", "none"}, {"id", nullptr}, {"by", nullptr}, {"name", ""}, {"detail", ""}, {"position", nullptr}, {"distance", nullptr}};
+                const auto found                   = [&](const char *kind, const char *by) {
+                    result["hit"]      = true;
+                    result["kind"]     = kind;
+                    result["by"]       = by;
+                    result["position"] = Vec(picked.point);
+                    result["distance"] = picked.distance;
+                };
+                if (picked.light != 0) {
+                    found("light", "bounds");
+                    result["id"]   = id(SelectionKind::Light, picked.light);
+                    result["name"] = "Point light";
+                }
+                else if (picked.effect != 0) {
+                    found("effect", "bounds");
+                    result["id"] = id(SelectionKind::Effect, picked.effect);
+                    if (const PlacedEffect *effect = editor._effects.Find(picked.effect)) {
+                        result["name"]   = effect->label;
+                        result["detail"] = effect->name;
+                    }
+                }
+                else if (picked.placed != 0) {
+                    found("prop", picked.placedMethod == PlacedPickMethod::Collision ? "collision" : "bounds");
+                    result["id"] = id(SelectionKind::Placed, picked.placed);
+                    if (const PlacedObject *object = editor._scene.Find(picked.placed)) {
+                        result["name"]   = object->name;
+                        result["detail"] = object->model;
+                    }
+                }
+                else if (picked.world.kind != WorldPickKind::None) {
+                    const bool object = picked.world.kind == WorldPickKind::RenderNode || picked.world.kind == WorldPickKind::Entity;
+                    found(object ? "level" : picked.world.kind == WorldPickKind::Terrain ? "terrain" : "none", picked.world.boundsOnly ? "bounds" : "collision");
+                    std::string label, detail;
+                    DescribeWorldPick(picked.world, label, detail);
+                    result["name"]   = label;
+                    result["detail"] = detail;
+                    if (const std::uint64_t adopted = editor._world.FindByPick(picked.world)) {
+                        result["id"] = id(SelectionKind::World, adopted);
+                    }
+                }
+            }
+            else if (name == "wb_pose_anchors_query") {
+                std::vector<PoseAnchor> anchors;
+                editor.CollectPoseAnchors(args.contains("center") ? ReadVec(args.at("center")) : editor._camera.GetPose().position, args.value("radius", 40.0F), anchors);
+                result["anchors"] = nlohmann::json::array();
+                for (const PoseAnchor &anchor : anchors) {
+                    result["anchors"].push_back({{"position", Vec(anchor.position)}, {"yaw", anchor.yawDegrees}, {"label", anchor.label}, {"class", anchor.partClass}, {"part", anchor.partName},
+                        {"objectId", anchor.placedId != 0 ? nlohmann::json(id(SelectionKind::Placed, anchor.placedId)) : nlohmann::json(nullptr)}});
+                }
+                result["count"] = anchors.size();
+            }
             else if (name == "wb_ground_probe" || name == "wb_project_points") {
                 result["points"] = nlohmann::json::array();
                 for (const auto &value : args.at("points")) {
@@ -1198,8 +1418,8 @@ namespace KCDC::Features::Prop {
                 for (const auto &entry : args.at("steps")) {
                     const auto toolName                           = entry.at("tool").get<std::string>();
                     static constexpr std::string_view supported[] = {"wb_objects_query", "wb_object_get", "wb_props_create", "wb_effects_create", "wb_lights_create", "wb_light_update", "wb_objects_transform", "wb_effect_update", "wb_prop_physics_set", "wb_prop_collision_rebuild",
-                        "wb_object_settings_update", "wb_objects_duplicate", "wb_objects_convert", "wb_objects_delete", "wb_objects_drop_to_ground", "wb_groups_update", "wb_level_objects_query", "wb_level_object_get", "wb_level_object_update", "wb_level_edits_restore",
-                        "wb_camera_set", "wb_camera_frame", "wb_raycast", "wb_ground_probe", "wb_project_points"};
+                        "wb_object_settings_update", "wb_objects_duplicate", "wb_objects_convert", "wb_objects_delete", "wb_objects_drop_to_ground", "wb_plants_flatten", "wb_groups_update", "wb_level_objects_query", "wb_level_object_get", "wb_level_object_update", "wb_level_edits_restore", "wb_grass_clear", "wb_grass_clearings_list", "wb_grass_restore",
+                        "wb_camera_set", "wb_camera_frame", "wb_raycast", "wb_pose_anchors_query", "wb_pick_at", "wb_ground_probe", "wb_project_points"};
                     if (std::find(std::begin(supported), std::end(supported), toolName) == std::end(supported)) {
                         throw std::runtime_error("Tool is not supported inside a batch: " + toolName);
                     }

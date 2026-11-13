@@ -365,6 +365,12 @@ namespace KCDC::Features::Horse {
         float _steerOwnerYaw    = 0.0F;
         MafiaNet::Time _steerAt = 0;
 
+        // A copy: the facing it was last asked to turn to, and when, which
+        // the next frame's step carries on from while the body has not
+        // turned that far. Zero while nothing has been asked of this body.
+        float _headingAsked            = 0.0F;
+        MafiaNet::Time _headingAskedAt = 0;
+
         // A copy: when it was last presented, for the frame's length, and
         // the native body whose pace and speed the hooks hold to the wire's
         // -- kept as a key, so it can be released after the body has gone.

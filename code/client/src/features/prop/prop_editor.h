@@ -9,6 +9,7 @@
 #include "prop_editor_document.h"
 #include "prop_editor_effects.h"
 #include "prop_editor_environment.h"
+#include "prop_editor_figure.h"
 #include "prop_editor_history.h"
 #include "prop_editor_keymap.h"
 #include "prop_editor_library.h"
@@ -16,6 +17,8 @@
 #include "prop_editor_mcp.h"
 #include "prop_editor_objects.h"
 #include "prop_editor_patrols.h"
+#include "prop_editor_poses.h"
+#include "prop_editor_plants.h"
 #include "prop_editor_scene.h"
 #include "prop_editor_selection.h"
 
@@ -101,6 +104,12 @@ namespace KCDC::Features::Prop {
         bool layerOff = false; // hidden by the level's own layer switch
     };
 
+    /** One clearing in the terrain's grass as the panel sees it. */
+    struct GrassRow {
+        std::uint64_t id = 0;
+        Shared::Game::GrassClearing box;
+    };
+
     /** What the cursor rests on, refreshed a few times a second. */
     struct HoverInfo {
         bool valid      = false;
@@ -179,6 +188,10 @@ namespace KCDC::Features::Prop {
         /** Seconds between restarts of a one-shot effect, so it stays visible; 0 plays it once. */
         float oneShotRepeat = 3.0F;
 
+        /** Takes the level's low plants out from under each mesh, door, interactive object or item as it is placed, in the same undo step. */
+        bool flattenPlants = false;
+        PlantFlattening plants;
+
         bool operator==(const PlacementOptions &other) const = default;
     };
 
@@ -213,7 +226,8 @@ namespace KCDC::Features::Prop {
         std::vector<LightRow> lightRows;
         std::size_t liveEmitters = 0; // everything VfxService is playing, not only the editor's
         std::vector<WorldRow> worldRows;
-        std::vector<Shared::Game::LevelEditDefinition> worldDocument; // the level edits a save writes
+        std::vector<GrassRow> grassRows;
+        std::vector<Shared::Game::LevelEditDefinition> worldDocument; // the level edits a save writes, grass clearings included
         SelectionInfo selection;
 
         /** Selected besides `selection`, which the gizmo sits on; boxes for the outline. */
@@ -236,6 +250,17 @@ namespace KCDC::Features::Prop {
         nlohmann::json patrolProgress;
         std::string patrolPreviewStatus;
         std::vector<glm::vec3> patrolPath;
+
+        /** Where the game poses bodies near the camera, while the overlay is on: the editor's smart objects and the level's own. */
+        std::vector<PoseAnchor> poseAnchors;
+
+        // The scale figure: a person standing in the scene, outside the project.
+        bool figureActive   = false;
+        bool figureStanding = false;
+        std::string figureRole;
+        std::string figureStatus = "No figure is standing.";
+        SDK::Vec3 figurePosition {};
+        float figureYaw = 0.0F;
 
         // The placement brush.
         int armedModel     = AssetLibrary::kNone; // a mesh or effect row, per `armedIsEffect`
@@ -330,6 +355,7 @@ namespace KCDC::Features::Prop {
             Disarm,
             Preview,
             PatrolPreview,
+            Figure, // stand the scale figure `previewRole`; with `enable` off, take it away
             ProbeGround,
             SetEffectTuning,
             PlaceLight,
@@ -354,6 +380,9 @@ namespace KCDC::Features::Prop {
             PickAt,
             Focus,
             DropToGround,
+            FlattenPlants, // take the level's low plants out from under the selected placed objects; `value` the margin, `value2` the tallest plant taken
+            ClearGrass,   // take the terrain's grass out from under the selected placed objects; `value` the margin
+            RestoreGrass, // give the grass of clearing `id` back, or of every clearing when it is 0
             Import,
             HideWorld,
             RestoreWorld,
@@ -409,6 +438,7 @@ namespace KCDC::Features::Prop {
             float value2 = 0.0F;
             bool enable  = false; // on/off, additive selection, or group transform
             bool effect  = false; // Arm and Preview: the row is an effect, not a mesh
+            bool aimed   = false; // Figure: on the surface under ndcX, ndcY and facing the camera, rather than at `position` facing `value`
 
             Shared::Game::VfxTuning tuning;
             Shared::Game::LightTuning lightTuning;
@@ -444,9 +474,48 @@ namespace KCDC::Features::Prop {
             std::uint64_t placed = 0;
             WorldPick world;    // the level's own -- or terrain, or a solid nothing can select -- when it is nearer than the editor's
             SDK::Vec3 point {}; // where the ray meets what was picked
-            int inspected = 0;  // level objects the octree weighed
+            float distance = 0.0F;
+            int inspected  = 0; // level objects the octree weighed
+            /** How `placed` was found: by its collider, or by its box where it has none to ask. */
+            PlacedPickMethod placedMethod = PlacedPickMethod::None;
         };
         PickResult PickThrough(const SDK::Vec3 &heading, PickEffort effort);
+
+        /** The editor's own object and the level's under a ray from the editor camera, before effects and lights are weighed. */
+        struct ScenePick {
+            PlacedPick placed;
+            WorldPick world; // empty when the collider the ray struck is one of the editor's own
+        };
+        ScenePick PickScene(const SDK::Vec3 &heading, PickEffort effort);
+
+        /**
+         * Every pose anchor within `radius` of `centre`: the parts of the
+         * editor's own smart objects that carry a pose helper, read off their
+         * blueprints, and the level's entities of the same classes. Game thread.
+         */
+        void CollectPoseAnchors(const SDK::Vec3 &centre, float radius, std::vector<PoseAnchor> &anchors) const;
+
+        /**
+         * Takes out of the world the level's plants rooted under a placed
+         * object, as `options` chooses them, adding one hide per plant to
+         * `step`. Returns how many went. Nothing goes while Default is hidden
+         * or locked, where newly adopted level objects belong.
+         */
+        std::size_t FlattenPlantsUnder(std::uint64_t placedId, const PlantFlattening &options, HistoryStep &step);
+
+        /**
+         * Clears the terrain's grass under a placed object, as `options`
+         * sizes the box, adding the clearing to `step`. Returns its id; 0
+         * when the object has no box, or the very same box is cleared
+         * already. `change` takes what the engine reported.
+         */
+        std::uint64_t ClearGrassUnder(std::uint64_t placedId, const GrassClearingOptions &options, HistoryStep &step, KCDC::Features::Grass::GrassChange &change);
+
+        /** Clears one explicit box, adding the clearing to `step`. 0 for a box that is not sane or is cleared already. */
+        std::uint64_t ClearGrassIn(const Shared::Game::GrassClearing &box, HistoryStep &step, KCDC::Features::Grass::GrassChange &change);
+
+        /** Gives the grass of one clearing back, adding that to `step`. */
+        bool RestoreGrass(std::uint64_t clearingId, HistoryStep &step);
 
         /** Re-reads what the cursor rests on. Throttled; game thread. */
         void RefreshHover();
@@ -571,9 +640,16 @@ namespace KCDC::Features::Prop {
         void RenderEffectList(const EditorSnapshot &snapshot);
         void RenderEffectTuning(const EditorSnapshot &snapshot);
         void RenderEffectMarkers(const EditorSnapshot &snapshot);
+
+        /** Draws each pose anchor as a dot with a tick the way a body there faces, and names the one under the cursor. */
+        void RenderPoseAnchors(const EditorSnapshot &snapshot);
+
+        /** The pose anchor whose marker is under the cursor, or null. Render thread. */
+        const PoseAnchor *PoseAnchorUnderCursor(const EditorSnapshot &snapshot) const;
         void RenderPlacementOptions();
         void RenderSceneTab(const EditorSnapshot &snapshot);
         void RenderLevelEdits(const EditorSnapshot &snapshot);
+        void RenderGrassClearings(const EditorSnapshot &snapshot);
         void RenderNearbyLevelObjects(const EditorSnapshot &snapshot);
         void RenderFiles(const EditorSnapshot &snapshot);
         void RenderDirectoryPicker();
@@ -709,16 +785,27 @@ namespace KCDC::Features::Prop {
         EditorLayers _layers;
         std::shared_ptr<const EditorLayers> _layersPublished = std::make_shared<const EditorLayers>();
         EditorScene _scene;
+
+        /** Reused between picks so one does not allocate. */
+        std::vector<PlacedPickBox> _pickBoxes;
         KCDC::Features::Area::AreaCollisionService _areaCollision;
         std::atomic<std::uint64_t> _collisionContext {1};
         std::map<std::uint64_t, std::string> _collisionResults;
         std::string _collisionError;
         Patrol::PatrolPreview _patrolPreview;
+        EditorFigure _figure;
+
+        /** The overlay's anchors, rebuilt about once a second while it is on. */
+        std::vector<PoseAnchor> _poseAnchors;
+        std::chrono::steady_clock::time_point _poseAnchorsRead {};
+        std::atomic<bool> _poseAnchorsShown {true};
+        std::atomic<float> _poseAnchorReach {40.0F};
         MapDocument _unresolvedDocument;
         std::shared_ptr<const MapDocument> _unresolvedPublished;
         EditorEffects _effects;
         EditorLights _lights;
         WorldObjects _world;
+        EditorGrass _grass;
         EditorHistory _history;
         std::uint64_t _completedCommand = 0;
 
@@ -871,6 +958,7 @@ namespace KCDC::Features::Prop {
         char _levelFilter[64]        = {};
         char _levelEditFilter[64]    = {};
         bool _includeMovedLevelEdits = false;
+        GrassClearingOptions _grassDraft;
         float _levelRadius           = 40.0F;
         bool _levelEntities          = true;
         bool _levelGeometry          = true;
@@ -933,6 +1021,7 @@ namespace KCDC::Features::Prop {
         std::vector<DocumentView> _views;
         std::uint64_t _viewsRevision = 0;
         char _viewName[48]           = {};
+        std::string _figureRole      = "townsman";
 
         // The transform draft, held so a drag is not reset by a stale snapshot.
         std::uint64_t _editId = 0;

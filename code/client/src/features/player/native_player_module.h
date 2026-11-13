@@ -215,6 +215,18 @@ namespace KCDC::Features::Player {
         static bool MountSpeed(const SDK::wh::entitymodule::C_Actor *mount, float &speed);
 
         /**
+         * The share of the stick a copy of `mount` is turned with toward its
+         * owner's facing, which `Human::ApplyNetworkMovement` adds to the X
+         * axis the remote rider's body replays: the rider's stick is what
+         * turns a ridden horse. Zero withdraws it, and so does
+         * `ClearMountLocomotion`. Enrols the mount on first use. Game thread.
+         */
+        static void SetMountSteer(const SDK::wh::entitymodule::C_Actor *mount, float stick);
+
+        /** The stick share held for `mount`; zero when it carries none. Any thread. */
+        static float MountSteer(const SDK::wh::entitymodule::C_Actor *mount);
+
+        /**
          * What a remote body's combat camera holds: the body's facing yaw and
          * its owner's look pitch, radians. The combat input listener seeds a
          * fighter's turn from that camera and in its free mode turns the body
@@ -329,10 +341,12 @@ namespace KCDC::Features::Player {
         RemoteKeySet _remoteEntities; // by EntityId, for natives that only have the entity; kValueLookHeld
         static constexpr std::size_t kValueLookHeld = 0;
         // By C_Actor address. The values: the pace and the runtime speed a
-        // copy is held to, each the float's bits with bit 32 set so that
-        // zero is none, and the owner's commanded gait.
+        // copy is held to and the stick share it is turned with, each the
+        // float's bits with bit 32 set so that zero is none, and the owner's
+        // commanded gait.
         static constexpr std::size_t kValueMountPace  = 0;
         static constexpr std::size_t kValueMountSpeed = 1;
+        static constexpr std::size_t kValueMountSteer = 2;
         static constexpr std::uint64_t kMountValueSet = 1ULL << 32;
         RemoteKeySet _remoteMounts;
 

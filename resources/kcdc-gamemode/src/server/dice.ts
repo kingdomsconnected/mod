@@ -119,7 +119,8 @@ class DiceLobby {
         });
         Events.on("diceMatchStart", (_match, first, second) => {
             this.leave(first);
-            this.leave(second);
+            // An NPC opponent was never in a lobby.
+            if (second instanceof Player) this.leave(second);
         });
         Events.on("diceMatchEnd", (match) => {
             for (const lobby of this.lobbies.values()) {

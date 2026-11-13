@@ -61,7 +61,7 @@ comes back as it was when the editor closes.
 | middle drag      | pan, scaled so the point you grabbed stays under the cursor                                                                                                                                                                        |
 | Alt + left drag  | orbit the selection, or what the drag began on                                                                                                                                                                                     |
 | F                | frame the selection (a group is framed whole)                                                                                                                                                                                      |
-| Camera tab       | speed, FOV, saved views (stored in the map), go to / bring the player                                                                                                                                                              |
+| Camera tab       | speed, FOV, saved views (stored in the map), go to / bring the player, the scale figure                                                                                                                                            |
 
 The fly keys are read from the game's `photomode_camera` action map, so a
 rebind in the Controls menu applies to the editor and to NoClip too. They go
@@ -85,6 +85,63 @@ not choose an interior floor or guarantee that a spot is walkable.
 
 The project, selections, and armed placement tool remain available when the
 editor returns. Map travel is unavailable in multiplayer.
+
+### Scale figure (Camera tab)
+
+To judge a scene's proportions without leaving the editor, stand a person
+in it. Rest the cursor on the ground or a floor and press **H**: a figure
+stands there, facing the camera. **Stand it in the middle of the view**, in
+the Camera tab's **Scale figure** section, does the same for the point the
+view is centred on, and **Figure** chooses who stands: a guard, a townsman,
+a townswoman and the other roles the patrol preview offers.
+
+**Look from its eyes** moves the editor camera to the figure's eye height,
+about 1.65 m above its feet and a step in front of its face, looking where
+it looks. Stand the figure in a doorway or at a table and look from its
+eyes to see the room as a player standing there will.
+
+The figure stands still, cannot be hurt, and is not part of the project: it
+is not saved, exported or undone, and it cannot be selected or moved --
+press H again to stand it somewhere else. It stays when F7 hands you the
+player, so you can walk around it, and goes when you take it away, change
+level or leave the session. One figure stands at a time, and it shares the
+game's one preview body with the patrol preview: starting either takes the
+other away. Without a level loaded, or where the game refuses the body, the
+section says why.
+
+### Pose anchors
+
+A seat, a bed or a crafting station poses a body at fixed places: where it
+sits on a bench, lies on a bed, stands at an anvil. The editor draws each
+of them as a dot with a tick pointing the way a body there faces -- green
+for the interactive objects you placed, blue for the level's own -- so you
+can see whether an object has a pose bound to it, where, and how many: a
+two-seat bench shows two.
+
+Rest the cursor on a dot to read it: the game's name for the pose
+(`Sit_1Place_Bench_Low`, `Bed_1Place_High`) and the part that carries it,
+or a level entity's own name and class. Press **H** there and the scale
+figure stands on the anchor, facing as the body will, instead of on the
+ground: that shows whether a seat is clear of the table in front of it or
+a bed's head is against the wall.
+
+**Show where the game poses a body**, in the Camera tab's **Pose anchors**
+section, turns the dots on or off, and **Anchor reach** sets how far from
+the camera they are listed, 40 m by default.
+
+An anchor marks where the pose is bound and its facing. The exact spot of
+each helper point comes from the game's own tables, so the figure stands at
+the anchor; it does not sit. To see the pose itself, press F7 and use the
+object as a player: an interactive object you placed stands assembled, so a
+bench can be sat on and a bed lain on without a server.
+
+A pose belongs to the interactive object that brings it; a mesh from the
+asset library has none. To make a bench players can sit on, place one from
+**`interactive` -> `seats`**. To have them sit on a mesh of your own
+choosing instead, place that mesh, place the interactive object on it, and
+tick **Only the pose, without its furniture** in its Object tab: its own
+bench goes and its anchors stay, for you to line up with the mesh. See
+[Doors, interactive objects and items](#doors-interactive-objects-and-items).
 
 ### Conditions (Environment tab)
 
@@ -178,6 +235,31 @@ offset, and where it goes when the cursor points at the sky.
 If a model cannot create collision, placement with static or rigid physics
 fails with a message. Choose **None** to place it as decoration.
 
+**Flatten the level's plants under it**, in the Placement section, takes
+the level's low plants out of the world under each mesh, door, interactive
+object or item as you place it, so leaf litter, fallen branches, tufts and
+bushes do not come up through a floor. The plants and the placement are one
+undo step. **Plant margin** widens the footprint, and **Tallest plant
+taken** (3 m by default) keeps trees standing. The level's plant boxes are
+coarse: litter lying flat measures a metre and a pile of branches up to two
+and a half, which is why the default is not lower. For objects already placed, select them and click **Flatten
+the plants under it** in the Object tab: it uses the same two settings and
+is one undo step for the whole selection.
+
+A flattened plant is a level object taken out, like one you deleted: it is
+listed under **Level → Deleted**, where **Restore** brings it back, and the
+export carries it in the map's `world` entry, so a server running the
+export removes it for every player. Moving the object afterwards does not
+bring the plants back or flatten new ones.
+
+Only plants the level placed as objects of their own are reached -- the
+ones the selection brush takes with **Vegetation** ticked. The tall grass
+of a meadow or a forest floor is not among them: it is merged into the
+level's terrain detail, is not an object, and cannot be flattened, selected
+or deleted. In a forest clearing of the Trosky level, taking out every
+plant object within seven metres removed the litter, branches and bushes
+and left the grass standing.
+
 ### Doors, interactive objects and items
 
 The Library also lists three kinds of things the server builds as working
@@ -215,6 +297,20 @@ place of Scale and Physics. Each change is one undo step.
   item class GUID of the key that opens it.
 - An item: **Amount**, **Quality** (0 for the class's own), and **Own
   health** and **Own condition** (off uses the class's own).
+- An interactive object: **Only the pose, without its furniture**. Ticked,
+  the object stands without the mesh its blueprint brings -- the bench, the
+  bed frame, the table -- and keeps what the game sits, lays or works a
+  body at, and the prompt that offers it. Put it where a mesh of your own
+  stands and players sit on that mesh. Nothing of it is drawn then, so turn
+  the [pose anchors](#pose-anchors) on to see it: its dots mark where a
+  body goes and which way it faces, and the scale figure stands on them.
+  Click near a dot to select it, or pick it in the Scene tab. The mesh you
+  put there is an ordinary prop: it does not move with the object, so
+  select both, or group them, to move them together. The pose is the
+  blueprint's own -- a low bench's seat height stays a low bench's -- so
+  choose the blueprint that matches your mesh. The box is greyed for a
+  chair, whose seat is one of its own moving parts, and for the smokehouse,
+  which has no furniture to leave out.
 
 The level's own doors and stations are level objects: select one and delete
 it as any other, and the export takes it out on the server too. The level's
@@ -245,6 +341,28 @@ Left click selects anything: a prop you placed, or the level's own brushes,
 vegetation and entities. Ctrl+click adds to or takes out of the selection;
 the gizmo sits on the first and the rest follow it as one body -- moved,
 turned about it and scaled from it.
+
+A click selects what the cursor is on, not what it is near:
+
+- A solid object you placed -- static or rigid physics -- is selected where
+  the cursor is on its collision. The box around it does not count: a click
+  that passes a fence panel's box and lands on the table behind it selects
+  the table.
+- An object without collision -- physics **None**, a door's leaf, an item --
+  is found by its box, which now turns and scales with the object instead
+  of standing square to the world. It is selected when the cursor crosses
+  that box in front of the surface behind it. When that surface is a
+  smaller object you placed, the smaller one is selected: a cup under a
+  canopy, not the canopy.
+- A box the camera is inside is never taken, so standing inside a large
+  decoration no longer sends every click to it. Step outside it to click
+  it, or select it with a box, a lasso or the Layers tab.
+- A solid object whose collision does not cover all of its mesh, such as a
+  tree that is solid at the trunk only, is still selected by its box when
+  the cursor is on nothing else you placed. A click on the ground under its
+  crown stays a click on the ground.
+
+The label beside the cursor names what a click there would select.
 
 Undo and redo select what they changed, when it is still there: Ctrl+Z after
 moving a prop gives you that prop back, even one that is hard to click
@@ -305,7 +423,8 @@ searched in smaller pieces; the status line says when a search was still cut
 short. Level objects a tool selected that nothing changed are let go the next
 time you use a selection tool, so they never reach the saved project. Grass
 and small plants are merged into the level's terrain detail and cannot be
-selected.
+selected; [Clearing the grass](#clearing-the-grass) takes them out of a box
+instead.
 
 These are the default keys. The **Keys** tab changes any of them: click an
 action, then press the new key with any Ctrl, Shift or Alt it needs; Escape,
@@ -326,6 +445,7 @@ similar radius and Visible only.
 | --------------- | ------------------------------------------------------------------------------------------------------------------ |
 | 1 2 3           | move, rotate, scale                                                                                                |
 | B               | brush selection on or off                                                                                          |
+| H               | stand the scale figure under the cursor                                                                            |
 | L               | a drag selects by box or by lasso                                                                                  |
 | G               | local or world axes                                                                                                |
 | X               | snapping for the tool in hand (each tool keeps its own step)                                                       |
@@ -403,6 +523,56 @@ an object is streamed out the row says **far**. From far off, the level's
 baked distant mesh still shows the original; up close it is gone.
 
 Placed props cast shadows.
+
+### Clearing the grass
+
+The tall grass, and the flowers and ferns that grow with it, are not objects.
+The level bakes them into its terrain, a sixteen-metre square at a time, so
+nothing in the Level tab lists them and no selection tool reaches them. A
+floor placed in a meadow has the grass coming up through it.
+
+To take it out, select what you placed and click **Clear the grass under
+it** in the Object tab. Every such plant rooted under each selected object
+goes: inside its footprint grown by a margin, from two metres under its
+lowest point, for a floor set on a slope, up to its top. An object standing
+upright clears a patch turned with it, so a house set at an angle clears a
+house-shaped patch; a tilted one, or a smart object's assembly, clears the
+box around it. The whole selection is one undo step.
+
+**Level → Grass (count)** lists the clearings with their centre and size.
+**Give back** brings the grass of one back, **Give all the grass back**
+every one, and Ctrl+Z undoes either. **Margin** sets how far around a
+footprint the next clearing reaches, half a metre by default.
+
+A clearing is a box in the level, not a property of the object: moving or
+deleting the object afterwards leaves it where it was made. Give it back
+and clear again. Clearings overlap freely; a plant returns only when the
+last box holding it goes.
+
+Plants a player can gather are left standing. The game keeps its own count
+of those for regrowth, and a herb hidden here would still be offered to the
+hand. Trees, bushes and the leaf litter the level placed one by one are
+objects: select and delete those as any other.
+
+Clearings are saved with the project and exported in the map's `world`
+array as `grass` entries, so a server running the export clears the same
+boxes for every player:
+
+```json
+{ "kind": "grass", "at": [1203.5, 2210.25, 41.0], "halfSize": [6.5, 4.5, 3.0], "yaw": 30.0, "hidden": true }
+```
+
+`at` is the centre of the box, `halfSize` half its size along its own two
+ground axes and up, each from 0.01 to 128 metres, and `yaw` its turn about
+the vertical in degrees, counter-clockwise seen from above. A script makes
+one with `LevelEdit.apply` and the same object; `edit.hidden = false` gives
+the grass back while keeping the edit, and `edit.restore()` drops it.
+
+The grass goes within the second, and comes back as fast when a clearing is
+given back. The game reads the grass from the level again each time a
+stretch of ground streams in; a clearing is applied again there before that
+ground is first drawn, so it holds through travel and a reload of the
+level, and for players who arrive later.
 
 ### Areas (Areas tab)
 

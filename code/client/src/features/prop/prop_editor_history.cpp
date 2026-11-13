@@ -5,7 +5,7 @@
 #include <utility>
 
 namespace KCDC::Features::Prop {
-    void EditorHistory::Revert(const HistoryAction &action, EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights) {
+    void EditorHistory::Revert(const HistoryAction &action, EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, EditorGrass &grass) {
         switch (action.kind) {
         case HistoryAction::Kind::Layers: break;   // restored by timeline advance
         case HistoryAction::Kind::Authored: break; // published by timeline advance and restored by the render owner
@@ -32,10 +32,12 @@ namespace KCDC::Features::Prop {
         case HistoryAction::Kind::LightDelete: lights.Restore(action.light); break;
         case HistoryAction::Kind::LightMove: lights.RestoreTransform(action.id, action.before.position); break;
         case HistoryAction::Kind::LightTuning: lights.RestoreTuning(action.id, action.lightTuningBefore); break;
+        case HistoryAction::Kind::GrassPlace: grass.Remove(action.grass.id); break;
+        case HistoryAction::Kind::GrassDelete: grass.Restore(action.grass); break;
         }
     }
 
-    void EditorHistory::Replay(const HistoryAction &action, EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights) {
+    void EditorHistory::Replay(const HistoryAction &action, EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, EditorGrass &grass) {
         switch (action.kind) {
         case HistoryAction::Kind::Layers: break;   // restored by timeline advance
         case HistoryAction::Kind::Authored: break; // published by timeline advance and restored by the render owner
@@ -62,10 +64,12 @@ namespace KCDC::Features::Prop {
         case HistoryAction::Kind::LightDelete: lights.Remove(action.light.id); break;
         case HistoryAction::Kind::LightMove: lights.RestoreTransform(action.id, action.after.position); break;
         case HistoryAction::Kind::LightTuning: lights.RestoreTuning(action.id, action.lightTuningAfter); break;
+        case HistoryAction::Kind::GrassPlace: grass.Restore(action.grass); break;
+        case HistoryAction::Kind::GrassDelete: grass.Remove(action.grass.id); break;
         }
     }
 
-    bool EditorHistory::Undo(EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, std::string &label, EditorLayers *layers, std::vector<SelectionRef> *touched) {
+    bool EditorHistory::Undo(EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, EditorGrass &grass, std::string &label, EditorLayers *layers, std::vector<SelectionRef> *touched) {
         KCDC_JUNK;
         if (!KCDC_OPAQUE_TRUE) {
             return false;
@@ -75,7 +79,7 @@ namespace KCDC::Features::Prop {
             return false;
         }
         for (auto it = step->actions.rbegin(); it != step->actions.rend(); ++it) {
-            Revert(*it, scene, world, effects, lights);
+            Revert(*it, scene, world, effects, lights, grass);
         }
         label = step->label;
         if (touched != nullptr) {
@@ -84,7 +88,7 @@ namespace KCDC::Features::Prop {
         return true;
     }
 
-    bool EditorHistory::Redo(EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, std::string &label, EditorLayers *layers, std::vector<SelectionRef> *touched) {
+    bool EditorHistory::Redo(EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, EditorGrass &grass, std::string &label, EditorLayers *layers, std::vector<SelectionRef> *touched) {
         KCDC_JUNK;
         if (!KCDC_OPAQUE_TRUE) {
             return false;
@@ -94,7 +98,7 @@ namespace KCDC::Features::Prop {
             return false;
         }
         for (const auto &action : step->actions) {
-            Replay(action, scene, world, effects, lights);
+            Replay(action, scene, world, effects, lights, grass);
         }
         label = step->label;
         if (touched != nullptr) {

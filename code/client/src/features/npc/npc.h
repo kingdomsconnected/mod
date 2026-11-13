@@ -58,6 +58,11 @@ namespace KCDC::Features::Npc {
             return _spawnRefused;
         }
         bool PreviewReady() const {
+            return IsBodyReady();
+        }
+
+        /** Whether the body is dressed, awake and animated: what anything that plays actions on it waits for. */
+        bool IsBodyReady() const {
             return _bodyReady && IsPresentable(ResolveActor());
         }
 

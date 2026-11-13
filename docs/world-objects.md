@@ -293,32 +293,34 @@ own.
 ### Blueprints
 
 `SmartObject.blueprints()` lists everything `SmartObject.spawn` can place,
-sorted by name. Each row has `name`, `kind` and `seats` (how many bodies can
-sit or lie on it at once). The list is compiled into the build:
+sorted by name. Each row has `name`, `kind`, `seats` (how many bodies can
+sit or lie on it at once) and `bare` (whether it can be placed without its
+furniture; see [Bare placements](#bare-placements)). The list is compiled
+into the build:
 
-| Blueprint                                     | Kind       | Seats |
-| --------------------------------------------- | ---------- | ----- |
-| `Bed/bed_bench`                               | `bed`      | 1     |
-| `Bed/bed_high`                                | `bed`      | 1     |
-| `Bed/bed_high_double`                         | `bed`      | 2     |
-| `Bed/bed_low`                                 | `bed`      | 1     |
-| `Bed/bed_low_ver1`                            | `bed`      | 1     |
-| `Bed/bed_low_ver2`                            | `bed`      | 1     |
-| `Bench/bench_1place_low`                      | `seat`     | 1     |
-| `Bench/bench_1place_low_table`                | `seat`     | 1     |
-| `Bench/bench_2places_high`                    | `seat`     | 2     |
-| `Bench/bench_2places_low`                     | `seat`     | 2     |
-| `Bench/bench_2places_low_table`               | `seat`     | 2     |
-| `Bench/bench_3places_low`                     | `seat`     | 3     |
-| `Chair/chair_high`                            | `seat`     | 1     |
-| `Chair/chair_low`                             | `seat`     | 1     |
-| `profession/apothecary/alchemyTable_wip`      | `alchemy`  | 0     |
-| `profession/blacksmith/smithy_workshop`       | `smithing` | 0     |
-| `profession/blacksmith/smithy_workshop_small` | `smithing` | 0     |
-| `profession/butcher/butcher_dryer`            | `drying`   | 0     |
-| `profession/butcher/butcher_smokeHouse`       | `smoking`  | 0     |
-| `Table/table_dice`                            | `dice`     | 2     |
-| `Tent/tent_1`                                 | `bed`      | 1     |
+| Blueprint                                     | Kind       | Seats | Bare |
+| --------------------------------------------- | ---------- | ----- | ---- |
+| `Bed/bed_bench`                               | `bed`      | 1     | yes  |
+| `Bed/bed_high`                                | `bed`      | 1     | yes  |
+| `Bed/bed_high_double`                         | `bed`      | 2     | yes  |
+| `Bed/bed_low`                                 | `bed`      | 1     | yes  |
+| `Bed/bed_low_ver1`                            | `bed`      | 1     | yes  |
+| `Bed/bed_low_ver2`                            | `bed`      | 1     | yes  |
+| `Bench/bench_1place_low`                      | `seat`     | 1     | yes  |
+| `Bench/bench_1place_low_table`                | `seat`     | 1     | yes  |
+| `Bench/bench_2places_high`                    | `seat`     | 2     | yes  |
+| `Bench/bench_2places_low`                     | `seat`     | 2     | yes  |
+| `Bench/bench_2places_low_table`               | `seat`     | 2     | yes  |
+| `Bench/bench_3places_low`                     | `seat`     | 3     | yes  |
+| `Chair/chair_high`                            | `seat`     | 1     | no   |
+| `Chair/chair_low`                             | `seat`     | 1     | no   |
+| `profession/apothecary/alchemyTable_wip`      | `alchemy`  | 0     | yes  |
+| `profession/blacksmith/smithy_workshop`       | `smithing` | 0     | yes  |
+| `profession/blacksmith/smithy_workshop_small` | `smithing` | 0     | yes  |
+| `profession/butcher/butcher_dryer`            | `drying`   | 0     | yes  |
+| `profession/butcher/butcher_smokeHouse`       | `smoking`  | 0     | no   |
+| `Table/table_dice`                            | `dice`     | 2     | yes  |
+| `Tent/tent_1`                                 | `bed`      | 1     | yes  |
 
 The name is the game's prefab path under `Prefabs/`. `SmartObject.spawn`
 matches it without regard to case.
@@ -335,10 +337,12 @@ the same object a world resource's `smartObjects` array stores:
 | `position`  | `Vector3` or `[x, y, z]`                       | required    | Where the prefab's origin goes, as the level's copies stand. |
 | `rotation`  | `Quaternion`, `{x, y, z, w}` or `[x, y, z, w]` | no rotation | Which way it faces.                                          |
 | `name`      | string                                         | none        | Up to 64 bytes of UTF-8. `smartObject.name` reads it back.   |
+| `bare`      | boolean                                        | `false`     | Place it without its furniture. `smartObject.bare` reads it. |
 
 It throws an `Error` when `definition` is not an object, the blueprint is
 unknown, `position` is missing or not finite, `rotation` is not a finite
-quaternion, or `name` is longer than 64 bytes.
+quaternion, `name` is longer than 64 bytes, `bare` is not a boolean, or
+`bare` is `true` for a blueprint that cannot stand bare.
 
 ```ts
 const dice = SmartObject.spawn({ blueprint: "Table/table_dice", position: [3102.0, 820.5, 57.3], rotation: yaw(0), name: "tavern-dice" });
@@ -358,6 +362,7 @@ A `SmartObject` has:
 | `blueprint` | The blueprint it was placed from.                                                                                          |
 | `kind`      | `seat`, `bed`, `dice`, `alchemy`, `smithing`, `drying` or `smoking`.                                                       |
 | `name`      | The name it was placed with; empty for none.                                                                               |
+| `bare`      | `true` when it was placed without its furniture.                                                                           |
 | `stationId` | The GUID of its station part, as `Dice.tables()` and `SmartObject.stations()` list it. Empty for a seat or a bed.          |
 | `seats`     | The GUIDs of the places a body sits or lies on. A seated player's stance and `Dice.tables()`'s `seats` use the same GUIDs. |
 | `destroy()` | Takes it down for every player. Anyone sitting on it or working at it is let go.                                           |
@@ -371,6 +376,48 @@ entity ID. To find one by name, filter `SmartObject.all()`.
 A smart object never moves. Assigning its `position` or `rotation`, or
 calling `setVirtualWorld`, is put back on the next server tick, with a
 warning in the server log. To move one, destroy it and place it again.
+
+### Bare placements
+
+A blueprint brings its own furniture: `Bench/bench_2places_low` is always
+the same shabby bench. With `bare: true` the server places only what the
+interaction runs on -- the places a body sits or lies, the station, and the
+triggers that offer the prompt -- and clients build no furniture for it. Put
+it where a prop of your own stands and players sit on that prop:
+
+```ts
+// A log bench from the mesh catalog, and two places to sit on it.
+Prop.spawn("objects/manmade/common_furniture/benches/low/bench_log_a.cgf", { x: 3104.5, y: 820.5, z: 57.3 });
+const seat = SmartObject.spawn({ blueprint: "Bench/bench_2places_low", position: [3104.5, 820.5, 57.3], bare: true, name: "log-bench" });
+
+console.log(seat.bare, seat.seats.length);  // true 2
+```
+
+What to know:
+
+- **The pose is the blueprint's.** The seat height, the spacing between two
+  places and the side a body gets up on are the game's, tuned to the
+  blueprint's own furniture. Choose the blueprint closest to your prop -- a
+  low bench for a low wall, `Bed/bed_low` for a pallet -- and line the two up
+  by eye. In the World Builder the pose anchors show where each body goes
+  ([Pose anchors](map-editor.md#pose-anchors)).
+- **Nothing ties the two together.** The prop and the bare smart object are
+  two objects. Moving or destroying one leaves the other.
+- **Nothing is solid or visible.** A bare smart object has no collision and
+  draws nothing. Without a prop under it, a player sits on thin air.
+- **Not every blueprint.** `Chair/chair_high` and `Chair/chair_low` seat a
+  body on a chair entity the game moves with the sitter, and the smokehouse
+  has no separate furniture. They refuse `bare: true`; the `bare` column
+  above, and `SmartObject.blueprints()`, say which accept it. Where a
+  blueprint mixes both, as the smithy does, the static meshes go and the
+  parts that are entities of the prefab -- the forge, the bellows -- stay.
+- **Stations too.** A bare dice table, alchemy table or drying rack is
+  listed and judged like any placed station. Its dice, book and tools stand
+  where the blueprint's own table would hold them, so the prop has to offer
+  a top at that height.
+
+`toJSON()` writes `bare` only when it is `true`, so a definition saved
+before this option existed reads back unchanged.
 
 ### Stations
 
@@ -522,9 +569,15 @@ takes and `smartObject.toJSON()` returns:
 
 ```json
 "smartObjects": [
-  { "blueprint": "Table/table_dice", "position": [3102.0, 820.5, 57.3], "rotation": [0, 0, 0, 1], "name": "tavern-dice" }
+  { "blueprint": "Table/table_dice", "position": [3102.0, 820.5, 57.3], "rotation": [0, 0, 0, 1], "name": "tavern-dice" },
+  { "blueprint": "Bench/bench_2places_low", "position": [3104.5, 820.5, 57.3], "rotation": [0, 0, 0.7071, 0.7071], "bare": true }
 ]
 ```
+
+The second entry is a [bare placement](#bare-placements): the two places of
+a bench without the bench, for a prop the same resource puts there in
+`objects`. An entry whose blueprint cannot stand bare stops startup, like
+any other bad entry.
 
 ### `items`
 

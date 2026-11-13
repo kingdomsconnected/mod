@@ -95,12 +95,16 @@ select an interior floor.
 | Selection and history          | Native objects, authored areas and routes; region selection (`wb_select_in_rect`, `wb_select_in_polygon`, `wb_select_in_radius`, `wb_select_brush`, `wb_select_in_area`, `wb_select_similar`) with a shared filter; shared undo/redo, which reselects what it changed |
 | Keys                           | Read and rebind the editor's keys, including the Default and W E R presets (`wb_keymap_get`, `wb_keymap_update`)                                                                                                                                                      |
 | Native level objects           | Nearby browse, inspect, adopt, transform, hide, swap for an asset-library mesh (`wb_level_object_update` with `model`), restore, and copy or convert into props (`wb_objects_duplicate`, `wb_objects_convert`)                                                        |
+| Plants under placed objects    | Take the level's low plants out from under placed objects (`wb_plants_flatten`), or as each is placed (`flattenPlants`, `plantMargin` and `plantMaxHeight` in `wb_placement_update`)                                                                                  |
+| Terrain grass                  | Clear the grass baked into the terrain under placed objects or in an explicit box, list the clearings and give the grass back (`wb_grass_clear`, `wb_grass_clearings_list`, `wb_grass_restore`)                                                                       |
 | Native areas                   | Query, inspect, point containment and copy into authored areas                                                                                                                                                                                                        |
 | Authored areas                 | Create, inspect, replace, duplicate, delete, groups and point containment                                                                                                                                                                                             |
 | Patrols                        | Route and point authoring, NPC role discovery, preview start/progress/stop                                                                                                                                                                                            |
+| Pose anchors                   | List where the game poses a body near a point: placed smart objects' seats, beds and stations, and the level's own (`wb_pose_anchors_query`)                                                                                                                         |
+| Scale figure                   | Stand a temporary person of an NPC role at a position or under a screen point, read it and its eye point, take it away (`wb_figure_place`, `wb_figure_get`, `wb_figure_remove`)                                                                                      |
 | Camera                         | Read/set, frame, saved views and restore                                                                                                                                                                                                                              |
 | Environment                    | Preview conditions (hour, clock speed, sky preset, rain), level preset and profile discovery, and the game's own clock                                                                                                                                                |
-| Spatial queries                | Raycast, ground probe and point projection                                                                                                                                                                                                                            |
+| Spatial queries                | Raycast, what a click at a screen point would select (`wb_pick_at`), ground probe and point projection                                                                                                                                                                |
 | Projects                       | New/open/save/recover, metadata, document inspection/import/validation and file listing                                                                                                                                                                               |
 | Outputs                        | Blueprint save/place, world resource export and server API export                                                                                                                                                                                                     |
 | Diagnostics                    | Operations, bounded audit log and viewport PNG capture                                                                                                                                                                                                                |
@@ -115,6 +119,39 @@ directory selected in World Builder. Relative paths resolve under `maps`.
 MCP cannot grant itself another file root. Writes use the editor's staged
 file writer; replacing an existing file requires `overwrite: true` where
 the tool exposes that option. File tools do not open modal dialogs.
+
+## Clearing the grass
+
+The tall grass is baked into the terrain rather than placed as objects, so
+`wb_level_objects_query` and the selection tools never return it.
+`wb_grass_clear` takes it out of an upright box instead:
+
+- `ids` clears under placed props, doors, smart objects or items. Each
+  object's footprint is grown by `margin` metres, 0.5 by default and at
+  most 10, and reaches from two metres under its lowest point to its top.
+  An upright object gives a box turned with it; a tilted one, or a smart
+  object's assembly, the box around it.
+- `center` and `halfSize` clear an explicit box: its centre, and half its
+  size along its own two ground axes and up, each from 0.01 to 128 metres.
+  `yaw` turns it about the vertical, in degrees, counter-clockwise seen
+  from above.
+
+Both may be given in one call, which is one undo step. Every ID is checked
+before anything is cleared. The result lists the clearings made, each with
+its `id`, `center`, `halfSize`, `yaw`, and the `sectors` and `plants` the
+engine reported: the sixteen-metre terrain squares streamed in that the box
+reaches, and the plants taken out of them. A box whose ground is streamed
+out reports none and is applied when it streams in. A box cleared already
+is not cleared twice and is left out of the result. Plants a player can
+gather stay.
+
+`wb_grass_clearings_list` lists the clearings standing. `wb_grass_restore`
+gives the grass back for `ids`, or for every clearing with `all: true`, as
+one undo step; restoring releases the IDs. Clearing IDs are their own kind:
+the object tools do not take them.
+
+Clearings are saved with the project and exported as `grass` entries of the
+map's `world` array. `wb_document_get` shows them there.
 
 ## Doors, smart objects and items
 
@@ -133,16 +170,30 @@ and `placedKind` says which kind a row is:
 Pass the key as `model` to `wb_props_create`, with an optional `settings`
 object. A door takes `name`, `locked`, `lock` (`none`, `bolt`, `boltAndKey`
 or `key`), `lockpickable`, `lockDifficulty` (0 to 1) and `keyItem`. A smart
-object takes `name`. An item takes `name`, `amount`, `quality`, `health` and
-`condition`. These objects reject `scale` and `physics`, in creation and in
-`wb_objects_transform`, and `wb_prop_physics_set` refuses them: the server
-builds them at their own size. A field a kind does not take is ignored, and
-a value the server would refuse fails the call with the reason.
+object takes `name` and `bare`. An item takes `name`, `amount`, `quality`,
+`health` and `condition`. These objects reject `scale` and `physics`, in
+creation and in `wb_objects_transform`, and `wb_prop_physics_set` refuses
+them: the server builds them at their own size. A field a kind does not take
+is ignored, and a value the server would refuse fails the call with the
+reason.
+
+`bare: true` places a smart object without its blueprint's furniture: the
+seat, bed or station and the prompts that offer it stand alone, so a prop
+created beside it with `wb_props_create` is what players see and sit on.
+`wb_pose_anchors_query` still lists its poses, which is how to line it up
+with the prop. A blueprint whose furniture is one of its own entities
+(`Chair/chair_high`, `Chair/chair_low`) or that has none
+(`profession/butcher/butcher_smokeHouse`) refuses `bare: true`, with the
+reason; `false` or leaving it out is always accepted and is not stored.
 
 `wb_object_get` reports `kind` as `door`, `smartObject` or `item`, the
 canonical `model` (a door leaf by path, a blueprint by name, a shipped item
-by GUID), its `key`, `settings` and `built`. `wb_object_settings_update`
-replaces the settings as one undo step; omitted fields take their defaults.
+by GUID), its `key`, `settings` and `built`, and for a smart object
+`takesBare`: whether its blueprint accepts `bare`. A bare smart object's
+`bounds` is a small box around its parts, since it has no mesh to measure.
+`wb_object_settings_update` replaces the settings as one undo step; omitted
+fields take their defaults. Changing `bare` rebuilds the preview with or
+without the furniture, and undo and redo rebuild it back.
 `wb_document_get` pages them through the `doors`, `smartObjects` and `items`
 collections, which is how a project and an export store them.
 
@@ -282,6 +333,32 @@ Changes to existing contracts require an explicit migration or versioning
 decision. Contract tests live in the existing `KCDCTests` executable; the
 loopback HTTP suite runs as `KCDCTests --suite world-builder-mcp`.
 
+## Flattening plants under placed objects
+
+`wb_plants_flatten` takes the level's low plants out of the world under
+placed props, doors, smart objects and items. `ids` names them; a level
+object, effect or light ID is refused and nothing changes. A plant goes when
+the level placed it as an object of its own, it is rooted in an object's
+world footprint grown by `margin` metres (0 to 5, 0.25 by default), from
+2 m under the object's lowest point to its top, and its own box is no
+taller than `maxHeight` (0.1 to 6, 3 by default). The result has
+`flattened`, the count, and `ids`, the adopted level object IDs, which
+`wb_level_edits_restore` gives back. The whole call is one undo step and
+none when nothing went. It is refused while the Default layer is hidden or
+locked, since newly adopted level objects belong to it.
+
+The plants become hidden level edits: `wb_objects_query` lists them, a
+project saves them, and an export carries them in `world`. The tall grass
+is merged into the level's terrain detail, is not an object and cannot be
+reached: expect litter, branches, tufts and bushes to go, and grass to
+stay.
+
+`wb_placement_get` and `wb_placement_update` carry the same behaviour for
+interactive placement: `flattenPlants` (false by default) flattens under
+each object as the brush places it, in the placement's own undo step, with
+`plantMargin` and `plantMaxHeight`. `wb_props_create` does not flatten;
+call `wb_plants_flatten` with the new ID.
+
 ## Viewport settings, project favorites, and layers
 
 `wb_viewport_get` reads the project's `space` (`world` or `local`), snap
@@ -299,6 +376,29 @@ viewport clicks, hover, and `wb_raycast`; update it with
 `wb_viewport_update({"settings":{"pickPreferPhysics":false}})`.
 Anonymous level-brush colliders now resolve to their mesh and placement;
 `wb_raycast` keeps its existing response schema.
+
+`wb_pick_at` answers what a viewport click would select, without selecting
+it. It takes `aim`, a screen point in normalized device coordinates (-1 to
+1, +y up) through the editor camera, and returns `hit`, `kind` (`prop`,
+`effect`, `light`, `level`, `terrain` or `none`), `by` (`collision` or
+`bounds`), `id`, `name`, `detail`, `position` and `distance`. `id` is the
+opaque object ID of a prop, effect, light or adopted level object, and
+`null` for a level object not yet adopted and for terrain. It resolves a
+click the way the viewport does:
+
+- A solid object the editor placed is found where the ray strikes its
+  collision (`by: collision`), never because the ray crossed its bounding
+  box.
+- An object without collision is found by its oriented box (`by: bounds`)
+  when the ray enters it in front of the struck surface. A box containing
+  the camera is not taken, and a smaller placed object struck behind a
+  larger box keeps the pick.
+- A solid placed object is offered by its oriented box only when the ray
+  struck no placed object and the struck point lies outside that box.
+
+`wb_raycast` is unchanged: it reports the level and collision under a ray
+and applies none of these rules to placed objects' boxes. `wb_select_brush`
+takes what `wb_pick_at` reports for the same `aim`.
 
 `wb_level_object_update` takes `model`, a mesh path from the asset library,
 to swap a level object for that mesh: the object goes out of the world with
@@ -352,6 +452,55 @@ that block both directions, with `collisionFloor` and `collisionCeiling`
 2, `0.2` when omitted). Create/update, query/get, project saves and undo
 use the same settings. See [Area collision](area-collision.md) for shape
 limits.
+
+## Scale figure
+
+`wb_figure_place` stands a temporary person in the scene to judge its
+proportions by. `role` is a name from `wb_npc_roles_query`. Give either
+`position`, the figure's feet as `[x, y, z]` in world metres, with an optional `yaw` in
+degrees as `wb_camera_get` reads it, counter-clockwise from +Y seen from
+above, or `aim`, a screen point in normalized device coordinates through
+the editor camera: the figure then stands on the surface there and faces
+the camera. Giving both, neither, or `yaw` with
+`aim` is refused, as is an unknown role. The call is queued; read the
+outcome with `wb_figure_get`.
+
+`wb_figure_get` returns `active` (a figure was asked for), `standing` (its
+body is up), `role`, `position`, `yaw`, `eyePoint` and `status`. `eyePoint`
+is where the editor's **Look from its eyes** stands: 1.65 m above the feet
+and 0.3 m in front of the face. Pass it and `yaw` to `wb_camera_set` to
+look at the scene as that person does. `position`, `yaw` and `eyePoint` are
+`null` while no figure is active; when set, `position` and `eyePoint` are
+`[x, y, z]`, as `wb_camera_set` spells a position. `wb_figure_remove` takes
+the figure away.
+
+The figure belongs to the editing session, not to the document: it is not
+saved, exported or undone, and has no object ID. One figure stands at a
+time. It shares the game's one preview body with the
+patrol preview, so `wb_figure_place` stops a patrol preview and
+`wb_patrol_preview_start` takes the figure away. The key that stands it
+under the cursor is `figureAtCursor` in `wb_keymap_get` and
+`wb_keymap_update`.
+
+## Pose anchors
+
+`wb_pose_anchors_query` lists where the game poses a body: every part of a
+placed smart object that carries a pose helper class, read off its
+blueprint, and the level's own entities of the classes the shipped
+blueprints pose bodies with. `center` defaults to the editor camera and
+`radius` to 40 metres (1 to 150). Each entry of `anchors` has `position`,
+`yaw` in degrees as `wb_camera_get` reads it, `label` (the helper class, such as
+`Sit_1Place_Bench_Low`, or a level entity's name), `class`, `part` (the
+blueprint's name for the part; empty for the level's own) and `objectId`,
+the placed smart object's opaque ID or `null` for the level's own. `count`
+is their number. The query reads the scene as it stands and does not
+depend on the editor's overlay being shown.
+
+An anchor is the part's origin and facing. The helper points themselves
+are the game's, so an anchor says a pose is bound there and which way it
+faces, not each seat's exact spot. Pass an anchor's `position` and `yaw` to
+`wb_figure_place` to stand the scale figure on it; the figure stands and
+does not play the pose.
 
 ## Selecting many objects
 

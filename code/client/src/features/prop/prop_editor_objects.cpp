@@ -407,7 +407,7 @@ namespace KCDC::Features::Prop {
         return PickFromOctree(origin, direction, maxDistance, nullptr, std::numeric_limits<float>::max(), true);
     }
 
-    WorldPick WorldObjects::PickFromOctree(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, const SDK::Vec3 *avoid, float maxSpan, bool plantsOnly) const {
+    WorldPick WorldObjects::PickFromOctree(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, const SDK::Vec3 *avoid, float maxSpan, bool plantsOnly, const std::unordered_set<SDK::EntityId> *exempt) const {
         WorldPick pick;
 
         if (SDK::I3DEngine::GetInstance() == nullptr) {
@@ -443,6 +443,12 @@ namespace KCDC::Features::Prop {
                 SDK::IRenderNode *node = nodes[index];
                 if (!IsPickableNode(node) || (plantsOnly && node->GetRenderNodeType() != SDK::eERType_Vegetation)) {
                     continue;
+                }
+                if (exempt != nullptr) {
+                    SDK::IEntity *owner = node->GetOwnerEntity();
+                    if (owner != nullptr && exempt->contains(owner->GetId())) {
+                        continue;
+                    }
                 }
 
                 SDK::AABB bounds {};
@@ -492,7 +498,7 @@ namespace KCDC::Features::Prop {
         return pick;
     }
 
-    WorldPick WorldObjects::PickFromEntities(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, const SDK::Vec3 *avoid, float maxSpan) const {
+    WorldPick WorldObjects::PickFromEntities(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, const SDK::Vec3 *avoid, float maxSpan, const std::unordered_set<SDK::EntityId> *exempt) const {
         WorldPick pick;
 
         auto *entitySystem = SDK::IEntitySystem::GetInstance();
@@ -519,7 +525,7 @@ namespace KCDC::Features::Prop {
         iterator->MoveFirst();
         while (!iterator->IsEnd()) {
             SDK::IEntity *entity = iterator->Next();
-            if (entity == nullptr || entity->GetId() == localPlayerId) {
+            if (entity == nullptr || entity->GetId() == localPlayerId || (exempt != nullptr && exempt->contains(entity->GetId()))) {
                 continue;
             }
 
@@ -583,12 +589,12 @@ namespace KCDC::Features::Prop {
         return pick;
     }
 
-    WorldPick WorldObjects::Pick(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, PickEffort effort, bool preferPhysics) const {
+    WorldPick WorldObjects::Pick(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, PickEffort effort, bool preferPhysics, const std::unordered_set<SDK::EntityId> *boundsExempt) const {
         WorldPick pick;
 
         auto *physics = SDK::CPhysicalWorld::GetInstance();
         if (physics == nullptr) {
-            return PickFromOctree(origin, direction, maxDistance, nullptr, std::numeric_limits<float>::max());
+            return PickFromOctree(origin, direction, maxDistance, nullptr, std::numeric_limits<float>::max(), false, boundsExempt);
         }
 
         const float openReach = effort == PickEffort::Thorough ? maxDistance : kQuickOpenReach;
@@ -672,7 +678,7 @@ namespace KCDC::Features::Prop {
         const float limit     = haveSolid ? pick.distance + kInFrontSlack : openReach;
         const float spanLimit = haveSolid ? kDecorationSpan : std::numeric_limits<float>::max();
 
-        WorldPick inFront = PickFromOctree(origin, direction, limit, haveSolid ? &pick.hitPoint : nullptr, spanLimit);
+        WorldPick inFront = PickFromOctree(origin, direction, limit, haveSolid ? &pick.hitPoint : nullptr, spanLimit, false, boundsExempt);
         pick.inspected    = inFront.inspected;
 
         if (inFront.kind == WorldPickKind::None) {
@@ -681,7 +687,7 @@ namespace KCDC::Features::Prop {
                 return pick;
             }
 
-            const WorldPick fromEntities = PickFromEntities(origin, direction, limit, haveSolid ? &pick.hitPoint : nullptr, spanLimit);
+            const WorldPick fromEntities = PickFromEntities(origin, direction, limit, haveSolid ? &pick.hitPoint : nullptr, spanLimit, boundsExempt);
             if (fromEntities.kind == WorldPickKind::None) {
                 return pick;
             }

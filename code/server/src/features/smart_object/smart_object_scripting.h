@@ -25,6 +25,8 @@ namespace KCDC::Scripting {
         std::string GetBlueprint() const;
         std::string GetKind() const;
         std::string GetName() const;
+        // Whether it was placed without its blueprint's furniture.
+        bool IsBare() const;
         // The station part's GUID, as `Dice.tables()` and `Crafting.stations()` name it; empty for a seat or a bed.
         std::string GetStationGuid() const;
         // The GUIDs of the parts a body sits or lies on, as a seated player's stance names them.

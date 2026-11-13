@@ -272,12 +272,12 @@ declare global {
     diceTurnStart: [event: DiceProgressEvent];
 
     /**
-     * The server dealt a roll. Includes all six face values and the mask rolled this time.
+     * The server dealt a roll. Includes all six face values and the mask rolled this time. When `player` is the NPC on the second seat and `reason` is `rolled`, the decision is the script's: answer with Dice.move.
      */
     diceRoll: [event: DiceProgressEvent];
 
     /**
-     * The server accepted Continue or Pass. Invalid or repeated requests emit nothing.
+     * The server accepted Continue or Pass, from a player or through Dice.move. Invalid or repeated requests emit nothing.
      */
     diceMove: [event: DiceProgressEvent];
 
@@ -287,14 +287,14 @@ declare global {
     diceTurnEnd: [event: DiceProgressEvent];
 
     /**
-     * Dispatched once a match has started and both players have been sent to the table. Which of them throws first is drawn at random.
+     * Dispatched once a match has started and its players have been sent to the table. `second` is the Npc when one holds the second seat. Which seat throws first is drawn at random.
      */
-    diceMatchStart: [match: number, first: Player, second: Player, targetScore: number];
+    diceMatchStart: [match: number, first: Player, second: Player | Npc, targetScore: number];
 
     /**
-     * Dispatched once a match is over and both players have been told. `winner` is 0 when `first` won, 1 when `second` did, 255 when nobody did. `reason` is `won` (a player banked the target score), `gaveUp` (a player left the table), `left` (a player disconnected), `timedOut` (the player to throw did not move for three minutes), `failed` (a client could not play the table) or `stopped` (`Dice.stop`). A player who has gone since is null. Nothing changes hands on its own: what a match was played for is the gamemode's to settle here.
+     * Dispatched once a match is over and both players have been told. `winner` is 0 when `first` won, 1 when `second` did, 255 when nobody did. `reason` is `won` (a seat banked the target score), `gaveUp` (a player left the table), `left` (a player disconnected, or the NPC was removed or died), `timedOut` (the seat to throw, player or NPC, did not move for three minutes), `failed` (a client could not play the table) or `stopped` (`Dice.stop`). A player or NPC who has gone since is null. Nothing changes hands on its own: what a match was played for is the gamemode's to settle here.
      */
-    diceMatchEnd: [match: number, first: Player | null, second: Player | null, winner: number, reason: string, firstScore: number, secondScore: number];
+    diceMatchEnd: [match: number, first: Player | null, second: Player | Npc | null, winner: number, reason: string, firstScore: number, secondScore: number];
 
     /**
      * Synchronous decision before an unfinished craft settles, including when no native refund is due. Call refund() to request a full refund; return values are ignored. No handler or no call preserves native rules. JavaScript exceptions are logged and do not cancel a call already made. The callback expires on return; delayed calls do nothing. The `cancelled`, `interrupted` and `clientError` reasons are reported by the player's own client: a modified client can send any of them, so refunding on one lets that client keep its materials. Never grants a completed craft twice. craftingEnded follows the actual inventory changes.
@@ -3093,7 +3093,7 @@ declare global {
     match: number;
 
     /**
-     * Network ID of the acting player.
+     * Network ID of the acting player, or of the NPC on the second seat.
      */
     player: number;
 
@@ -3154,9 +3154,11 @@ declare global {
   }
 
   /**
-   * Dice matches between two players on the game's own dice table.
+   * Dice matches between two players, or a player and a server NPC, on the game's own dice table.
    * 
    * Both players sit down at the dice table nearest them and play it as they would against an NPC, the other player's body opposite. Every throw is dealt and every move checked by the server, by the game's own scoring rules; badges and dice perks are off, so a match is decided by the dice and the decisions alone.
+   * 
+   * An Npc may hold the second seat. Its body sits opposite the player, its throws are dealt like anyone's, and its decisions are the script's: `diceRoll` says what it threw, `Dice.move` plays its move.
    */
   const Dice: {
     /**
@@ -3167,13 +3169,22 @@ declare global {
     tables(virtualWorld?: number): DiceTableInfo[];
 
     /**
-     * Starts a match. Both players must stand together, within a few metres, at a dice table, and neither may be playing already. Throws an Error saying why when it cannot start.
+     * Starts a match. Both players must stand together, within a few metres, at a dice table, and neither may be playing already. An NPC is held to the same: it must stand at the table with the player, in the same virtual world. Throws an Error saying why when it cannot start.
      * @param first NetworkID of the player on the table's first seat.
-     * @param second NetworkID of the player on the second seat.
+     * @param second NetworkID of the player on the second seat, or of a living human Npc to seat there and play through Dice.move.
      * @param options The target score. Optional.
      * @returns The match id.
      */
     start(first: number, second: number, options?: DiceMatchOptions): number;
+
+    /**
+     * Plays the move of the NPC on the second seat, checked by the rules a player's move is. Legal only while it is the NPC's turn and its throw is on the table, so after a `diceRoll` naming it with reason `rolled`; calling it from that handler is supported. An accepted move raises `diceMove` and what follows from it. The NPC forfeits like a player when no move is accepted for three minutes.
+     * @param match Match ID.
+     * @param heldMask Bit mask of the dice to set aside, bit 0 for die 0 through bit 5 for die 5, among those `diceRoll` reported in `rolledMask`. Every die in it must count towards a scoring combination.
+     * @param pass True banks the turn after scoring the held dice, if any. False scores them, which needs at least one, and throws the rest.
+     * @returns False, with nothing changed, when the match has ended or has no NPC seat, it is not the NPC's turn, or the move is not legal.
+     */
+    move(match: number, heldMask: number, pass: boolean): boolean;
 
     /**
      * Changes both scoreboard labels on the next native scoreboard refresh. Empty restores a native label. Names allow at most 64 UTF-8 bytes and no control characters.
@@ -4656,9 +4667,9 @@ declare global {
   /** */
   interface LevelEditDefinition {
     /**
-     * What the object is; a brush when omitted. A brush has no identity of its own, so it is found by its mesh and where the level put it; a level entity by its EntityGuid.
+     * What the object is; a brush when omitted. A brush has no identity of its own, so it is found by its mesh and where the level put it; a level entity by its EntityGuid. Grass is no object: the edit is an upright box, `at`, `halfSize` and `yaw`, and with `hidden` every plant of the terrain's merged vegetation rooted in it goes -- tall grass, flowers, ferns -- except the ones a player can gather.
      */
-    kind?: 'brush' | 'entity' | undefined;
+    kind?: 'brush' | 'entity' | 'grass' | undefined;
 
     /**
      * A brush's mesh path, `objects/...cgf`, as the World Builder shows it; required for a brush. An entity's name, kept for reading only.
@@ -4676,12 +4687,22 @@ declare global {
     class?: string | undefined;
 
     /**
-     * Where the level put the object: its pivot, matched within 5 cm. A brush's key, with its mesh.
+     * Where the level put the object: its pivot, matched within 5 cm. A brush's key, with its mesh. For grass, the centre of the box.
      */
     at: Vector3 | number[];
 
     /**
-     * Whether it is taken out of the world: not drawn and not solid.
+     * Grass only, and required for it: half the box along its own two ground axes and up, each from 0.01 to 128 metres. Make it tall enough to hold the ground the plants stand on.
+     */
+    halfSize?: Vector3 | number[] | undefined;
+
+    /**
+     * Grass only: the box's turn about the vertical in degrees, counter-clockwise seen from above. None when omitted.
+     */
+    yaw?: number | undefined;
+
+    /**
+     * Whether it is taken out of the world: not drawn and not solid. A grass edit clears its box only while this is set.
      */
     hidden?: boolean | undefined;
 
@@ -4707,7 +4728,7 @@ declare global {
   }
 
   /**
-   * One change the server makes, for every player, to an object the level itself placed -- a brush, a tree or a level entity taken out of the world, moved, swapped for another mesh, or a mix of those. It is what a World Builder map's `world` array carries. `WorldRayHit.levelObject` names the object a trace met in the form `apply` takes.
+   * One change the server makes, for every player, to an object the level itself placed -- a brush, a tree or a level entity taken out of the world, moved, swapped for another mesh, or a mix of those -- or to the grass: the tall grass, flowers and ferns the level bakes into its terrain are not objects, and a `grass` edit takes out every one of them rooted in a box. It is what a World Builder map's `world` array carries. `WorldRayHit.levelObject` names the object a trace met in the form `apply` takes.
    */
   class LevelEdit {
     /**
@@ -4727,12 +4748,12 @@ declare global {
     readonly exists: boolean;
 
     /**
-     * Whether the object is a brush, found by its mesh and where the level put it, or a level entity, found by its EntityGuid.
+     * Whether the object is a brush, found by its mesh and where the level put it, a level entity, found by its EntityGuid, or a box of the terrain's grass.
      */
-    readonly kind: 'brush' | 'entity';
+    readonly kind: 'brush' | 'entity' | 'grass';
 
     /**
-     * A brush's mesh path, or the name the level gives the entity.
+     * A brush's mesh path, or the name the level gives the entity. Empty for grass.
      */
     readonly name: string;
 
@@ -4747,7 +4768,7 @@ declare global {
     readonly virtualWorld: number;
 
     /**
-     * Whether the object is taken out of the world: not drawn and not solid. Assignment takes it out or puts it back for every player, keeping any move.
+     * Whether the object is taken out of the world: not drawn and not solid. Assignment takes it out or puts it back for every player, keeping any move. For grass, whether the plants in the box are taken out.
      */
     hidden: boolean;
 
@@ -4757,7 +4778,7 @@ declare global {
     readonly moved: boolean;
 
     /**
-     * The mesh standing in the object's place, or empty. Assigning a prop catalog path or a mesh this server streams swaps the object for it on every player: the object goes, collision included, and the mesh stands where it stood -- or where `move` put it -- as solid static scenery. A felled tree leaves its stump this way. Assigning an empty string gives the object back. Throws for any other path.
+     * The mesh standing in the object's place, or empty. Assigning a prop catalog path or a mesh this server streams swaps the object for it on every player: the object goes, collision included, and the mesh stands where it stood -- or where `move` put it -- as solid static scenery. A felled tree leaves its stump this way. Assigning an empty string gives the object back. Throws for any other path, and for a grass edit.
      */
     model: string;
 
@@ -4772,7 +4793,7 @@ declare global {
      * @param position Where the object stands instead.
      * @param rotation Its orientation: a Quaternion, or Euler angles in degrees. Left out, it keeps the last move's.
      * @param scale A uniform scale or one per axis, from 0.01 to 100. Left out, it keeps the last move's.
-     * @returns False for a gone edit or a transform that is not finite.
+     * @returns False for a gone edit, a transform that is not finite, or a grass edit, whose box is fixed when it is applied.
      */
     move(position: Vector3, rotation?: Quaternion | Vector3, scale?: number | Vector3): boolean;
 
@@ -4796,7 +4817,7 @@ declare global {
      * Takes an object the level placed out of the world, moves it, or swaps it for another mesh, for every player in the virtual world -- whenever they join, and however far away they are. Collision goes with it. An edit already made to the same object in that world is restated rather than doubled, so applying one twice changes nothing. Kept in memory only: apply it again on boot. A `WorldRayHit.levelObject` is a definition already: spread it and add what to do, as in `LevelEdit.apply({ ...hit.levelObject, model: stump })`.
      * @param definition The object and what to do to it, in the format of one entry of a World Builder map's `world` array.
      * @param virtualWorld Optional virtual world whose players see it; the global one when omitted.
-     * @returns The edit. Throws for a definition no client could find the object by, or a `model` no client could load.
+     * @returns The edit. Throws for a definition no client could find the object by, a `model` no client could load, or a grass box that is not finite and within its limits.
      */
     static apply(definition: LevelEditDefinition, virtualWorld?: number): LevelEdit;
 
@@ -6300,6 +6321,11 @@ declare global {
      * What a script finds it by, up to 64 bytes of UTF-8.
      */
     name?: string | undefined;
+
+    /**
+     * True to place it without the blueprint's furniture: only the place a body takes, or the station, and the prompts that offer it, for a prop of your own choosing to stand there instead. Only a blueprint `SmartObject.blueprints()` lists with `bare` takes it. False when omitted.
+     */
+    bare?: boolean | undefined;
   }
 
   /**
@@ -6320,6 +6346,11 @@ declare global {
      * How many bodies can sit or lie on it at once.
      */
     seats: number;
+
+    /**
+     * Whether it can be placed `bare`: false for one whose furniture is one of its own entities, like a chair, or that has none.
+     */
+    bare: boolean;
   }
 
   /**
@@ -6403,6 +6434,11 @@ declare global {
     readonly name: string;
 
     /**
+     * Whether it was placed without its blueprint's furniture: only the place a body takes, or the station, and the prompts that offer it.
+     */
+    readonly bare: boolean;
+
+    /**
      * The GUID of its station part as sixteen lowercase hex digits: the `id` `Dice.tables()` and `SmartObject.stations()` give it. `Crafting.stations()` lists an alchemy table or a smithy as `<level>:<stationId>`. Empty for a seat or a bed. It lasts only until the server stops.
      */
     readonly stationId: string;
@@ -6430,10 +6466,10 @@ declare global {
     toJSON(): SmartObjectDefinition | null;
 
     /**
-     * Places one of the game's interactive prefabs -- its furniture, solid, and the entities its interaction runs on -- for every player in the virtual world, built on each client under the same GUIDs, so sitting on it and working at it replicate as they do at the level's own. A placed dice table, crafting station, drying rack or smokehouse joins `Dice.tables()`, `Crafting.stations()` and the server's checks like the level's own. Kept in memory only: place it again on boot. The resource that places it owns it, so it goes when that resource stops. NPCs do not use it.
+     * Places one of the game's interactive prefabs -- its furniture, solid, and the entities its interaction runs on -- for every player in the virtual world, built on each client under the same GUIDs, so sitting on it and working at it replicate as they do at the level's own. A placed dice table, crafting station, drying rack or smokehouse joins `Dice.tables()`, `Crafting.stations()` and the server's checks like the level's own. Kept in memory only: place it again on boot. The resource that places it owns it, so it goes when that resource stops. NPCs do not use it. A `bare` definition places the entities without the furniture, where a prop of your own stands.
      * @param definition What to place and where, in the format of one entry of a World Builder map's `smartObjects` array.
      * @param virtualWorld Optional virtual world whose players see it; the global one when omitted.
-     * @returns The smart object. Throws for an unknown blueprint or a transform that is not finite.
+     * @returns The smart object. Throws for an unknown blueprint, a transform that is not finite, or `bare` on a blueprint that cannot stand bare.
      */
     static spawn(definition: SmartObjectDefinition, virtualWorld?: number): SmartObject;
 
