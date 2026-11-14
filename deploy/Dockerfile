@@ -7,8 +7,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd --gid 10001 container \
     && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/container --shell /bin/bash container \
     && mkdir -p /home/container/resources /home/container/logs /home/container/.packages \
-    && chown -R 10001:10001 /home/container
+    && chown -R 10001:10001 /home/container \
+    && install -d -m 0555 /opt/kcdc /opt/kcdc/licenses
 
+# `COPY --chmod` applies its mode to any directory it has to create, so
+# licenses/ exists beforehand: 0444 on it leaves the file unreachable.
 COPY --chmod=0555 runtime/KCDCServer runtime/crashpad_handler /opt/kcdc/
 COPY --chmod=0444 runtime/libnode.so* /opt/kcdc/
 COPY --chmod=0444 runtime/LICENSE.txt runtime/NOTICE.txt /opt/kcdc/
