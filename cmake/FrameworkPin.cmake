@@ -29,8 +29,12 @@
 # with a fresh retry budget, assembles files from content-addressed chunks, owns the stall watch and the
 # failure reason, and can defer lanes past the join and admit downloads beside the player slots. MAJOR:
 # AssetPakInfo gained a serialized field, so client and server move together.
-set(FRAMEWORK_PIN_VERSION "41.0.0")
+# 41.1 runs ready script work between ticks, monitors script time/heap/GC per resource, shows text labels
+# per player and recomputes replication interest incrementally and in parallel; 41.2 runs a scripting
+# runtime only when its loop has work; 41.3 never makes a log call wait for the outputs; 41.4 keeps the
+# game thread off the D3D12 swapchain, carries audit hardening and crash fixes and compiles as C++23.
+set(FRAMEWORK_PIN_VERSION "41.4.0")
 
 # One archive per OS; the Windows one carries the x86 and x64 libraries (KCDC uses x64 only).
-set(FRAMEWORK_PIN_SHA256_windows "157032c663e86faadf35f88171142561ffc3a36a06bb355e23d2cd108e8ebb97")
-set(FRAMEWORK_PIN_SHA256_linux "643bb845cbff6fc295be8cac950d08621929d1fac4335171466902db4e59cb10")
+set(FRAMEWORK_PIN_SHA256_windows "3099221d2c0137ce22e53f6846d63293933ae0d16dee32150cefb58b294563ea")
+set(FRAMEWORK_PIN_SHA256_linux "a10611930f11532a431625bbae31a9b200ed626113e1e104c8acf617a2bf8c05")
