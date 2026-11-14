@@ -58,6 +58,11 @@ namespace KCDC::Features::Dice {
      *   seat one hold at a time, then scored or passed.
      * - **Badges and barks.** A badge is never bound, so none applies, and the
      *   opponent's NPC commentary is not voiced on a player's body.
+     * - **An NPC opponent.** The server may name one of its NPCs instead of a
+     *   player. Its body is bound the same way and its moves arrive as the
+     *   same commits, decided by a server script; the NPC's replica leaves
+     *   the body to the table for as long as it is held. It is an NPC, so
+     *   the table's commentary is voiced on it.
      *
      * Game-thread only: the detours, the RPC handlers and the tick all run there.
      */
@@ -81,11 +86,11 @@ namespace KCDC::Features::Dice {
         /** Raised on the loading thread; the tick drops the match without touching the table. */
         void NativeContextChanged() override;
 
-        /** Whether the dice table owns this body: the opponent's copy while a match is seated. */
+        /** Whether the dice table owns this body: the opponent's copy, a player's or an NPC's, while a match is seated. */
         bool HoldsBody(SDK::EntityId entityId) const;
         Shared::Game::StationState Station() const;
 
-        /** A remote body is about to go. The table is closed while the actor it holds is still alive. */
+        /** A remote player's or an NPC's body is about to go. The table is closed while the actor it holds is still alive. */
         void ForgetBody(SDK::EntityId entityId);
 
         void ApplyScoreNames() const;
@@ -123,7 +128,7 @@ namespace KCDC::Features::Dice {
         /** Whether a badge may be bound: never while a match runs. */
         bool RefusesBadge() const;
 
-        /** Whether an actor's bark must stay silent: the opponent's copy is a person, not an NPC. */
+        /** Whether an actor's bark must stay silent: a player's copy on the opponent seat is a person, not an NPC. */
         bool SilencesBark(const SDK::wh::entitymodule::C_Actor *actor) const;
 
       private:
@@ -187,6 +192,9 @@ namespace KCDC::Features::Dice {
         std::uint8_t _firstSeat              = 0;
         std::uint64_t _opponentNetworkId     = 0;
         SDK::EntityId _opponentEntityId      = 0;
+
+        /** Whether the body on the opponent seat is a server NPC's rather than a player's copy. */
+        bool _opponentIsNpc = false;
         std::uint32_t _targetScore           = 0;
         SDK::Vec3 _anchor                    = {};
         SDK::wh::playermodule::C_Dice *_dice = nullptr;

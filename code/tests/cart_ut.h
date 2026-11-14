@@ -162,17 +162,61 @@ MODULE(cart_motion, {
         EQUALS(KCDC::Shared::Game::CartWrapAngle(drive.leadYaw - drive.bodyYaw) <= KCDC::Shared::Game::kCartMaxLock + 1e-4F, true);
     });
 
-    IT("does not turn a standing cart, and turns one backing up the other way round", {
+    IT("does not turn a standing cart", {
         KCDC::Shared::Game::CartControls controls;
         controls.steer   = 1.0F;
         const auto still = run({}, controls, 1.0F);
         EQUALS(still.leadYaw, 0.0F);
+    });
 
+    // Backing up from facing +Y, the driver's left is -X: the reins left send
+    // the trailing axle there, the reins right to +X, for a wagon and for a
+    // two-wheeler alike, and none back it straight.
+    const auto reverse = [](KCDC::Shared::Game::CartDrive drive, float steer, float seconds, bool articulated, float wheelbase) {
+        const KCDC::Shared::Game::CartGaits gaits;
+        KCDC::Shared::Game::CartControls controls;
         controls.throttle = -1;
-        const auto back   = run({}, controls, 2.0F);
-        EQUALS(back.leadYaw < 0.0F, true);
-        EQUALS(back.speed < 0.0F, true);
-        EQUALS(back.lead.y < 0.0F, true);
+        controls.steer    = steer;
+        for (float t = 0.0F; t < seconds; t += kStep) {
+            drive = KCDC::Shared::Game::StepCart(drive, controls, gaits, wheelbase, articulated, false, kStep);
+        }
+        return drive;
+    };
+
+    IT("backs the rear of the cart the way the reins pull, both ways", {
+        for (const bool articulated : {true, false}) {
+            const float wheelbase = articulated ? kWheelbase : KCDC::Shared::Game::kCartShaftReach;
+            const auto left       = reverse({}, 1.0F, 3.0F, articulated, wheelbase);
+            const auto right      = reverse({}, -1.0F, 3.0F, articulated, wheelbase);
+            const auto straight   = reverse({}, 0.0F, 3.0F, articulated, wheelbase);
+            EQUALS(left.speed < 0.0F, true);
+            EQUALS(left.Axle(wheelbase).x < -1.0F, true);
+            EQUALS(right.Axle(wheelbase).x > 1.0F, true);
+            EQUALS(std::fabs(left.Axle(wheelbase).x + right.Axle(wheelbase).x) < 1e-3F, true);
+            EQUALS(std::fabs(straight.Axle(wheelbase).x) < 1e-3F, true);
+            EQUALS(straight.lead.y < -2.0F, true);
+        }
+    });
+
+    IT("brings a cart folded one way backing up round the other way", {
+        // The two-wheeler at its shaft lock used to fold on faster than the
+        // reins could swing it, and could only ever be backed round one way.
+        const float wheelbase = KCDC::Shared::Game::kCartShaftReach;
+        const auto folded     = reverse({}, -1.0F, 3.0F, false, wheelbase);
+        EQUALS(folded.bodyYaw > 0.5F, true);
+        const auto back = reverse(folded, 1.0F, 4.0F, false, wheelbase);
+        EQUALS(back.bodyYaw < folded.bodyYaw - 0.5F, true);
+        EQUALS(KCDC::Shared::Game::CartWrapAngle(back.leadYaw - back.bodyYaw) > 0.0F, true);
+        const auto let = reverse(folded, 0.0F, 3.0F, false, wheelbase);
+        EQUALS(std::fabs(KCDC::Shared::Game::CartWrapAngle(let.leadYaw - let.bodyYaw)) < 1e-3F, true);
+    });
+
+    IT("never swings the lead past its lock backing up", {
+        for (const bool articulated : {true, false}) {
+            const float lock = articulated ? KCDC::Shared::Game::kCartMaxLock : KCDC::Shared::Game::kCartMaxShaftLock;
+            const auto drive = reverse({}, 1.0F, 5.0F, articulated, articulated ? kWheelbase : KCDC::Shared::Game::kCartShaftReach);
+            EQUALS(std::fabs(KCDC::Shared::Game::CartWrapAngle(drive.leadYaw - drive.bodyYaw)) <= lock + 1e-4F, true);
+        }
     });
 
     IT("brakes before it backs up, and comes to a stop when let go", {

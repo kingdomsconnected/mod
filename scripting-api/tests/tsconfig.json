@@ -1,4 +1,4 @@
 {
   "extends": "../tsconfig.server.json",
-  "files": ["../shared.d.ts", "../generated/server-api.d.ts", "world-resources.ts", "player-vitals.ts", "npc-combat.ts", "lights.ts", "area-herbs.ts", "player-visor.ts"]
+  "files": ["../shared.d.ts", "../generated/server-api.d.ts", "world-resources.ts", "player-vitals.ts", "npc-combat.ts", "lights.ts", "area-herbs.ts", "player-visor.ts", "smart-object-bare.ts"]
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "features/prop/prop_editor_history.h"
+#include "features/prop/prop_editor_pick.h"
 #include "features/prop/prop_editor_selection.h"
 #include "features/prop/prop_editor_support.h"
 
@@ -260,5 +261,101 @@ MODULE(world_builder_selection, {
         step.actions.push_back(placed);
         const std::vector<KCDC::Features::Prop::SelectionRef> expected {{KCDC::Features::Prop::SelectionKind::Placed, 7}, {KCDC::Features::Prop::SelectionKind::World, 3}, {KCDC::Features::Prop::SelectionKind::Light, 2}, {KCDC::Features::Prop::SelectionKind::Placed, 11}};
         EQUALS((KCDC::Features::Prop::EditorHistory::TouchedObjects(step) == expected), true);
+    });
+
+    IT("enters a box turned and scaled with its object, not the world box around it", {
+        // A plank four metres long and twenty centimetres thick, turned an eighth about Z.
+        const SDK::AABB plank {SDK::Vec3 {-2.0F, -0.1F, 0.0F}, SDK::Vec3 {2.0F, 0.1F, 1.0F}};
+        const SDK::Matrix34 turned = SDK::Matrix34FromTransform(SDK::Vec3 {0.0F, 10.0F, 0.0F}, SDK::Quat {0.0F, 0.0F, 0.3826834F, 0.9238795F}, SDK::Vec3 {1.0F, 1.0F, 1.0F});
+        const SDK::AABB worldBox {SDK::Vec3 {-1.485F, 8.515F, 0.0F}, SDK::Vec3 {1.485F, 11.485F, 1.0F}};
+        bool inside = true;
+
+        // Square on: through its thickness, 0.1 * sqrt(2) before its pivot.
+        const float square = KCDC::Features::Prop::RayOrientedBoxEntry(SDK::Vec3 {0.0F, 0.0F, 0.5F}, SDK::Vec3 {0.0F, 1.0F, 0.0F}, plank, turned, inside);
+        EQUALS((std::fabs(square - 9.8586F) < 1e-3F && !inside), true);
+
+        // Alongside it, a metre off: through the corner of the world box, past the plank.
+        const SDK::Vec3 beside {-4.2929F, 4.2929F, 0.5F};
+        const SDK::Vec3 along {0.70710678F, 0.70710678F, 0.0F};
+        EQUALS(SDK::RayBoxEntryDistance(beside, along, worldBox) > 0.0F, true);
+        EQUALS(KCDC::Features::Prop::RayOrientedBoxEntry(beside, along, plank, turned, inside) < 0.0F, true);
+
+        // Stretched along its own X: the answer stays in world metres.
+        const SDK::AABB unit {SDK::Vec3 {0.0F, 0.0F, 0.0F}, SDK::Vec3 {1.0F, 1.0F, 1.0F}};
+        const SDK::Matrix34 stretched = SDK::Matrix34FromTransform(SDK::Vec3 {0.0F, 5.0F, 0.0F}, SDK::Quat {0.0F, 0.0F, 0.0F, 1.0F}, SDK::Vec3 {2.0F, 1.0F, 1.0F});
+        EQUALS(std::fabs(KCDC::Features::Prop::RayOrientedBoxEntry(SDK::Vec3 {1.5F, 0.0F, 0.5F}, SDK::Vec3 {0.0F, 1.0F, 0.0F}, unit, stretched, inside) - 5.0F) < 1e-4F, true);
+        EQUALS(KCDC::Features::Prop::RayOrientedBoxEntry(SDK::Vec3 {2.5F, 0.0F, 0.5F}, SDK::Vec3 {0.0F, 1.0F, 0.0F}, unit, stretched, inside) < 0.0F, true);
+        EQUALS(std::fabs(KCDC::Features::Prop::OrientedBoxVolume(unit, stretched) - 2.0F) < 1e-4F, true);
+        EQUALS(KCDC::Features::Prop::OrientedBoxContains(unit, stretched, SDK::Vec3 {1.9F, 5.5F, 0.5F}, 0.0F), true);
+        EQUALS(KCDC::Features::Prop::OrientedBoxContains(unit, stretched, SDK::Vec3 {2.04F, 5.5F, 0.5F}, 0.0F), false);
+        EQUALS(KCDC::Features::Prop::OrientedBoxContains(unit, stretched, SDK::Vec3 {2.04F, 5.5F, 0.5F}, 0.05F), true);
+
+        // From inside it says so, and a flattened box is never entered.
+        EQUALS((KCDC::Features::Prop::RayOrientedBoxEntry(SDK::Vec3 {1.0F, 5.5F, 0.5F}, SDK::Vec3 {0.0F, 1.0F, 0.0F}, unit, stretched, inside) == 0.0F && inside), true);
+        const SDK::Matrix34 flat = SDK::Matrix34FromTransform(SDK::Vec3 {}, SDK::Quat {0.0F, 0.0F, 0.0F, 1.0F}, SDK::Vec3 {1.0F, 0.0F, 1.0F});
+        EQUALS(KCDC::Features::Prop::RayOrientedBoxEntry(SDK::Vec3 {0.5F, -3.0F, 0.5F}, SDK::Vec3 {0.0F, 1.0F, 0.0F}, unit, flat, inside) < 0.0F, true);
+    });
+
+    IT("selects the object the cursor is on, not one whose box the ray crosses", {
+        const SDK::Matrix34 still = SDK::Matrix34FromTransform(SDK::Vec3 {}, SDK::Quat {0.0F, 0.0F, 0.0F, 1.0F}, SDK::Vec3 {1.0F, 1.0F, 1.0F});
+        const auto box            = [&still](std::uint64_t id, const SDK::Vec3 &min, const SDK::Vec3 &max, bool solid) {
+            return KCDC::Features::Prop::PlacedPickBox {id, SDK::AABB {min, max}, still, solid};
+        };
+        const auto struck = [](float distance, const SDK::Vec3 &point, std::uint64_t placed) {
+            KCDC::Features::Prop::PickSurface surface;
+            surface.hit      = true;
+            surface.distance = distance;
+            surface.point    = point;
+            surface.placed   = placed;
+            return surface;
+        };
+        const SDK::Vec3 eye {0.0F, 0.0F, 0.5F};
+        const SDK::Vec3 ahead {0.0F, 1.0F, 0.0F};
+
+        // A table struck at five metres, behind the loose box of a solid fence entered at three: the table.
+        const std::vector<KCDC::Features::Prop::PlacedPickBox> behindFence {box(2, {-3.0F, 3.0F, 0.0F}, {3.0F, 9.0F, 2.0F}, true), box(1, {-0.5F, 5.0F, 0.0F}, {0.5F, 6.0F, 1.0F}, true)};
+        KCDC::Features::Prop::PlacedPick pick = KCDC::Features::Prop::ChoosePlacedPick(behindFence, eye, ahead, 2000.0F, struck(5.0F, {0.0F, 5.0F, 0.5F}, 1));
+        EQUALS((pick.id == 1 && pick.method == KCDC::Features::Prop::PlacedPickMethod::Collision && pick.distance == 5.0F), true);
+
+        // The camera stands in a canopy without collision; a candle ahead of the ground is what the click is on.
+        const std::vector<KCDC::Features::Prop::PlacedPickBox> underCanopy {box(3, {-4.0F, -4.0F, 0.0F}, {4.0F, 4.0F, 3.0F}, false), box(4, {-0.1F, 6.0F, 0.4F}, {0.1F, 6.2F, 0.6F}, false)};
+        pick = KCDC::Features::Prop::ChoosePlacedPick(underCanopy, eye, ahead, 2000.0F, struck(8.0F, {0.0F, 8.0F, 0.5F}, 0));
+        EQUALS((pick.id == 4 && pick.method == KCDC::Features::Prop::PlacedPickMethod::Bounds && std::fabs(pick.distance - 6.0F) < 1e-4F), true);
+
+        // Behind what the ray struck it is hidden; with nothing struck it is in reach, up to the range.
+        pick = KCDC::Features::Prop::ChoosePlacedPick(underCanopy, eye, ahead, 2000.0F, struck(4.0F, {0.0F, 4.0F, 0.5F}, 0));
+        EQUALS((pick.id == 0 && pick.method == KCDC::Features::Prop::PlacedPickMethod::None), true);
+        pick = KCDC::Features::Prop::ChoosePlacedPick(underCanopy, eye, ahead, 2000.0F, KCDC::Features::Prop::PickSurface {});
+        EQUALS(pick.id, static_cast<std::uint64_t>(4));
+        pick = KCDC::Features::Prop::ChoosePlacedPick(underCanopy, eye, ahead, 5.0F, KCDC::Features::Prop::PickSurface {});
+        EQUALS(pick.id, static_cast<std::uint64_t>(0));
+
+        // Looking down at a table: a cloth lying on it is taken before it, a canopy around it is not.
+        const SDK::Vec3 above {0.0F, 1.0F, 3.5F};
+        const SDK::Vec3 down {0.0F, 0.8F, -0.6F};
+        const KCDC::Features::Prop::PickSurface tableTop = struck(2.5F / 0.6F, {0.0F, 1.0F + 0.8F * 2.5F / 0.6F, 1.0F}, 1);
+        const std::vector<KCDC::Features::Prop::PlacedPickBox> clothOnTable {box(1, {-1.0F, 4.0F, 0.0F}, {1.0F, 6.0F, 1.0F}, true), box(5, {-0.5F, 4.1F, 1.0F}, {0.5F, 4.9F, 1.02F}, false)};
+        pick = KCDC::Features::Prop::ChoosePlacedPick(clothOnTable, above, down, 2000.0F, tableTop);
+        EQUALS((pick.id == 5 && pick.method == KCDC::Features::Prop::PlacedPickMethod::Bounds), true);
+        const std::vector<KCDC::Features::Prop::PlacedPickBox> canopyOverTable {box(6, {-3.0F, 3.0F, 0.0F}, {3.0F, 7.0F, 3.2F}, false), box(1, {-1.0F, 4.0F, 0.0F}, {1.0F, 6.0F, 1.0F}, true)};
+        pick = KCDC::Features::Prop::ChoosePlacedPick(canopyOverTable, above, down, 2000.0F, tableTop);
+        EQUALS((pick.id == 1 && pick.method == KCDC::Features::Prop::PlacedPickMethod::Collision), true);
+
+        // A tree is solid at the trunk only. Through its crown to ground beyond, the tree; to the ground under it, not.
+        const std::vector<KCDC::Features::Prop::PlacedPickBox> tree {box(7, {-2.0F, 8.0F, 0.0F}, {2.0F, 12.0F, 8.0F}, true)};
+        pick = KCDC::Features::Prop::ChoosePlacedPick(tree, SDK::Vec3 {0.0F, 0.0F, 5.0F}, ahead, 2000.0F, struck(30.0F, {0.0F, 30.0F, 5.0F}, 0));
+        EQUALS((pick.id == 7 && pick.method == KCDC::Features::Prop::PlacedPickMethod::Bounds && std::fabs(pick.distance - 8.0F) < 1e-4F), true);
+        const float slope = std::sqrt(181.0F);
+        pick              = KCDC::Features::Prop::ChoosePlacedPick(tree, SDK::Vec3 {0.0F, 0.0F, 9.0F}, SDK::Vec3 {0.0F, 10.0F / slope, -9.0F / slope}, 2000.0F, struck(slope, {0.0F, 10.0F, 0.0F}, 0));
+        EQUALS(pick.id, static_cast<std::uint64_t>(0));
+
+        // Entered together, the smaller box; apart, the nearer. Either order.
+        const KCDC::Features::Prop::PlacedPickBox crate  = box(8, {-1.0F, 5.0F, 0.0F}, {1.0F, 7.0F, 2.0F}, false);
+        const KCDC::Features::Prop::PlacedPickBox candle = box(9, {-0.2F, 5.1F, 0.4F}, {0.2F, 5.3F, 0.6F}, false);
+        const KCDC::Features::Prop::PlacedPickBox beyond = box(10, {-0.2F, 6.0F, 0.4F}, {0.2F, 6.2F, 0.6F}, false);
+        EQUALS(KCDC::Features::Prop::ChoosePlacedPick({crate, candle}, eye, ahead, 2000.0F, KCDC::Features::Prop::PickSurface {}).id, static_cast<std::uint64_t>(9));
+        EQUALS(KCDC::Features::Prop::ChoosePlacedPick({candle, crate}, eye, ahead, 2000.0F, KCDC::Features::Prop::PickSurface {}).id, static_cast<std::uint64_t>(9));
+        EQUALS(KCDC::Features::Prop::ChoosePlacedPick({crate, beyond}, eye, ahead, 2000.0F, KCDC::Features::Prop::PickSurface {}).id, static_cast<std::uint64_t>(8));
+        EQUALS(KCDC::Features::Prop::ChoosePlacedPick({beyond, crate}, eye, ahead, 2000.0F, KCDC::Features::Prop::PickSurface {}).id, static_cast<std::uint64_t>(8));
     });
 });

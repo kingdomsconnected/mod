@@ -41,9 +41,11 @@ export function installDiceHandlers(): void {
         console.log(`diceMatchEnd: match ${match} ${reason}, seat ${winner} won, ${firstScore} : ${secondScore}`);
         const players = [first, second];
         const winning = winner === 0 || winner === 1 ? players[winner] : null;
+        // The second seat can be an NPC: it has no nickname and no chat to write to.
+        const winnerName = winning instanceof Player ? winning.nickname : "The opponent";
         for (const player of players) {
-            if (!player) continue;
-            const line = winning ? `${winning.nickname} won the game of dice, ${firstScore} : ${secondScore}.` : `The game of dice ended without a winner (${reason}).`;
+            if (!(player instanceof Player)) continue;
+            const line = winning ? `${winnerName} won the game of dice, ${firstScore} : ${secondScore}.` : `The game of dice ended without a winner (${reason}).`;
             Chat.sendToPlayer(player, line);
         }
     });

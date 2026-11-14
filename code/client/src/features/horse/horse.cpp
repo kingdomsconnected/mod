@@ -113,6 +113,22 @@ namespace KCDC::Features::Horse {
         constexpr float kSteerLookAheadMin     = 1.0F;  // m
         constexpr float kSteerMaxRadians       = 0.35F; // ~20 degrees
 
+        // What the base does not turn is ridden out. A standing copy takes
+        // the carried request above, but a cantering one barely answers the
+        // base: asked through it for five degrees more than it faced, it
+        // turned under two in ten seconds, ran askew and was placed six
+        // metres on. Its rider's stick is what turns a ridden horse, here as
+        // on its owner's machine, so the facing still owed goes into the X
+        // axis the remote rider's body replays
+        // (`NativePlayerModule::SetMountSteer`): this much of the stick a
+        // radian, never more than kSteerStickLimit of it, and none within
+        // kSteerStickDead. A cantering horse answers the stick only past
+        // some four tenths of its travel, so this takes over where the copy
+        // is some nine degrees off its target and leaves the rest to the base.
+        constexpr float kSteerStickGain  = 2.5F;
+        constexpr float kSteerStickLimit = 0.5F;
+        constexpr float kSteerStickDead  = 0.009F; // half a degree
+
         // Whatever the gap asks, the speed stays inside what the gait's
         // blendspace shows and the bend turns no faster than its turn axis
         // leaves over (`Shared::Game::HorseGaitBand`). The pace is the move
@@ -142,6 +158,17 @@ namespace KCDC::Features::Horse {
         constexpr float kStandTurnRate        = 2.0F;   // rad/s
         constexpr float kHeadingSnapRadians   = 1.5708F;
         constexpr MafiaNet::Time kMaxFrameMs  = 250;
+
+        // The turn is carried across frames, not restarted from the body on
+        // each: the base is read back as the entity's own facing by the next
+        // frame, and a request of a degree or so is not played. Stepped from
+        // the body, a standing copy at 120 frames a second asked for one
+        // degree a frame and never turned, so the few degrees a
+        // turn-in-place had left it off its owner's facing stayed. So the
+        // step starts from what was asked last frame (`HorseHeadingStart`),
+        // no further ahead of the body than this much turning -- what one
+        // frame that long asks already.
+        constexpr float kHeadingLeadSeconds = 0.1F;
 
         // Below this a stamina the simulator reported is the one the copy's soul holds.
         constexpr float kStaminaEpsilon = 1.0F;
@@ -547,6 +574,8 @@ namespace KCDC::Features::Horse {
         if (gap > kSnapDistance) {
             Framework::Logging::GetLogger(kLogger)->debug("Horse {} copy drifted {:.1f} m from its owner's; placed", GetNetworkID(), gap);
             KCDC::Common::PlaceEntity(_entity, glm::vec3(pose.position.x, pose.position.y, GroundedHeight(pose.position)), pose.rotation);
+            KCDC::Features::Player::NativePlayerModule::SetMountSteer(_horse, 0.0F);
+            _headingAskedAt = 0;
             return;
         }
 
@@ -557,6 +586,7 @@ namespace KCDC::Features::Horse {
         // body toward its base rotation. Not in the air: a jump's arc is the
         // horse's own.
         if (runtime == nullptr || _horse->IsJumping() || !KCDC::Common::IsFinite(pose.velocity) || !KCDC::Common::IsFinite(pose.rotation)) {
+            KCDC::Features::Player::NativePlayerModule::SetMountSteer(_horse, 0.0F);
             return;
         }
 
@@ -691,8 +721,16 @@ namespace KCDC::Features::Horse {
         }
         const float currentYaw = KCDC::Common::YawOf(glm::normalize(KCDC::Common::ToGlm(_entity->GetWorldRotation())));
         const float turnRate   = ownerHalted ? kStandTurnRate : std::fabs(ownerTurnRate) + band.turnSpeedMax;
-        const float steppedYaw = KCDC::Shared::Game::StepHorseHeading(currentYaw, yaw, turnRate, dtSeconds, kHeadingSnapRadians);
+        const bool carried     = _headingAskedAt != 0 && now >= _headingAskedAt && now - _headingAskedAt <= kMaxFrameMs;
+        const float startYaw   = carried ? KCDC::Shared::Game::HorseHeadingStart(currentYaw, _headingAsked, yaw, turnRate, kHeadingLeadSeconds, kHeadingSnapRadians) : currentYaw;
+        const float steppedYaw = KCDC::Shared::Game::StepHorseHeading(startYaw, yaw, turnRate, dtSeconds, kHeadingSnapRadians);
+        _headingAsked          = steppedYaw;
+        _headingAskedAt        = now;
         _horse->SetBaseRotationWithFlags(KCDC::Common::ToNative(glm::angleAxis(steppedYaw, glm::vec3(0.0F, 0.0F, 1.0F))), SDK::wh::entitymodule::C_Horse::kBaseRotationWithoutRider);
+
+        // And under a rider, through the stick: the same target, from where
+        // the body faces.
+        KCDC::Features::Player::NativePlayerModule::SetMountSteer(_horse, _followingRider ? KCDC::Shared::Game::HorseSteerStick(currentYaw, yaw, kSteerStickGain, kSteerStickLimit, kSteerStickDead, kHeadingSnapRadians) : 0.0F);
 
         // And the stride with it, under a rider: the gait the owner
         // commanded, sampled from the same packet, stated in place of the one
@@ -713,7 +751,8 @@ namespace KCDC::Features::Horse {
         if (_forcedMount != nullptr) {
             KCDC::Features::Player::NativePlayerModule::ClearMountLocomotion(_forcedMount);
         }
-        _presentedAt = 0;
+        _presentedAt    = 0;
+        _headingAskedAt = 0;
         ReleaseMountIfIdle();
     }
 

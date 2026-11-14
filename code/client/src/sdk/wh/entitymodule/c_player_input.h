@@ -117,6 +117,24 @@ namespace SDK::wh::entitymodule {
         }
 
         /**
+         * Rewrites the move vector `PreUpdate` consumes and leaves the keys'
+         * own record alone: the raw axes, the analog flag and the moving bit
+         * stay as the handlers wrote them, so the caller can go on reading
+         * what is held from `GetRawMovementInput`. The analog axes are
+         * written too, because `PreUpdate` copies them over the move vector
+         * while a stick is deflected.
+         *
+         * The handlers write one axis per key event and nothing in between,
+         * so a rewrite lasts until the next press or release and has to be
+         * renewed after it -- and has to be cleared by the caller once no
+         * key is held, since no handler will clear an axis it did not set.
+         */
+        void OverrideMoveVector(const SDK::Vec3 &direction) {
+            m_movementInput       = direction;
+            m_analogMovementInput = direction;
+        }
+
+        /**
          * Asks for a jump the way the bound jump handler does. `PreUpdate`
          * turns the bit into the movement request's jump flag (0x80000) and
          * clears it, and the movement HSM's ground pass decides from there.

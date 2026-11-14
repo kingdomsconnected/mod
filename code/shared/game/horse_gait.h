@@ -135,6 +135,34 @@ namespace KCDC::Shared::Game {
     }
 
     /**
+     * The facing a copy's step starts from this frame: what it was asked
+     * to turn to last frame while its body has not got there, the body's
+     * own otherwise.
+     *
+     * The base a copy's facing is written into is read back as the body's
+     * own facing by the next frame, and a request of a degree or so leaves
+     * the body where it stands: at 120 frames a second a standing horse's
+     * one degree a frame, asked again from the body every frame, never
+     * turned a copy. Carried from one frame to the next the request grows
+     * until the body takes it.
+     *
+     * It is held to what `leadSeconds` of turning at `maxRate` covers, so
+     * the body is never asked for more at once than a single frame of that
+     * length already asks; it never passes the target, and it never points
+     * away from it. A target `snapRadians` or more from the body is left
+     * to the step, which takes it whole. Angles in radians.
+     */
+    inline float HorseHeadingStart(float bodyYaw, float askedYaw, float targetYaw, float maxRate, float leadSeconds, float snapRadians) {
+        const float error = std::remainderf(targetYaw - bodyYaw, 6.2831853F);
+        if (std::fabs(error) >= snapRadians) {
+            return bodyYaw;
+        }
+        const float reach = std::min(std::fabs(error), std::max(0.0F, maxRate * leadSeconds));
+        const float lead  = std::remainderf(askedYaw - bodyYaw, 6.2831853F);
+        return bodyYaw + (error >= 0.0F ? std::clamp(lead, 0.0F, reach) : std::clamp(lead, -reach, 0.0F));
+    }
+
+    /**
      * Moves the copy's steering bend -- the angle its heading is turned off
      * the owner's toward the owner's line -- toward `wantedBend`, no faster
      * than the gait's turn range leaves over once the owner's own turn is
@@ -148,5 +176,23 @@ namespace KCDC::Shared::Game {
         const float headroom = std::max(0.0F, band.turnSpeedMax - std::fabs(ownerTurnRate));
         const float step     = headroom * dtSeconds;
         return previousBend + std::clamp(wantedBend - previousBend, -step, step);
+    }
+
+    /**
+     * The share of the stick's X axis that turns a ridden copy from
+     * `bodyYaw` toward `targetYaw`: `gain` of the stick for each radian it
+     * is off, no more than `limit` either way. Positive X turns a horse to
+     * its right, and yaw grows to the left, so the two have opposite signs.
+     *
+     * Nothing inside `deadRadians`, which is where the copy is to stay.
+     * Nothing either from `snapRadians` on: that turn is taken whole
+     * (`StepHorseHeading`), not ridden. Angles in radians.
+     */
+    inline float HorseSteerStick(float bodyYaw, float targetYaw, float gain, float limit, float deadRadians, float snapRadians) {
+        const float error = std::remainderf(targetYaw - bodyYaw, 6.2831853F);
+        if (std::fabs(error) < deadRadians || std::fabs(error) >= snapRadians) {
+            return 0.0F;
+        }
+        return -std::clamp(gain * error, -limit, limit);
     }
 } // namespace KCDC::Shared::Game

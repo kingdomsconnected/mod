@@ -2,6 +2,8 @@
 
 #include "level_edit.h"
 
+#include "features/grass/grass_module.h"
+
 #include <core_modules.h>
 #include <networking/replication/replication_manager.h>
 
@@ -20,9 +22,17 @@ namespace KCDC::Features::LevelEdit {
         _pendingRestores.push_back(networkId);
     }
 
+    void LevelEditService::RestoreGrass() {
+        for (const auto &[networkId, clearing] : _grass) {
+            KCDC::Features::Grass::GrassModule::Get().Remove(clearing);
+        }
+        _grass.clear();
+    }
+
     void LevelEditService::Reset() {
         _objects.RestoreAll();
         _applied.clear();
+        RestoreGrass();
         _observedContext = 0;
 
         std::scoped_lock lock(_pendingMutex);
@@ -41,6 +51,10 @@ namespace KCDC::Features::LevelEdit {
         // to put back: forget them, and apply every edit again to the new one.
         _objects.Forget();
         _applied.clear();
+
+        // The clearings are the module's to drop: it holds no sector of the
+        // old world, and stops listening until the first one is added again.
+        RestoreGrass();
         if (auto *replication = Framework::CoreModules::GetReplication()) {
             replication->ForEach<KCDC::Features::LevelEdit::LevelEdit>([this](KCDC::Features::LevelEdit::LevelEdit *edit) {
                 QueueApply(edit->GetNetworkID());
@@ -52,6 +66,10 @@ namespace KCDC::Features::LevelEdit {
         if (const auto found = _applied.find(networkId); found != _applied.end()) {
             _objects.Restore(found->second);
             _applied.erase(found);
+        }
+        if (const auto found = _grass.find(networkId); found != _grass.end()) {
+            KCDC::Features::Grass::GrassModule::Get().Remove(found->second);
+            _grass.erase(found);
         }
     }
 
@@ -65,6 +83,13 @@ namespace KCDC::Features::LevelEdit {
         auto *replication = Framework::CoreModules::GetReplication();
         auto *edit        = replication != nullptr ? replication->GetEntity<KCDC::Features::LevelEdit::LevelEdit>(networkId) : nullptr;
         if (edit == nullptr || (!edit->hidden && !edit->moved && edit->model.empty())) {
+            return;
+        }
+        if (edit->kind == KCDC::Shared::Game::LevelEditKind::Grass) {
+            // No object to find: the box goes to the one owner of the terrain's grass, which keeps it cleared as sectors stream in.
+            if (const std::uint64_t clearing = KCDC::Features::Grass::GrassModule::Get().Add(edit->Describe().Clearing()); clearing != 0) {
+                _grass[networkId] = clearing;
+            }
             return;
         }
         if (const std::uint64_t id = _objects.ApplyDocument(edit->Describe()); id != 0) {

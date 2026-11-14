@@ -18,6 +18,7 @@
 #include "damage_ut.h"
 #include "death_ut.h"
 #include "dice_ut.h"
+#include "dice_npc_ut.h"
 #include "door_api_ut.h"
 #include "door_ut.h"
 #include "duel_ut.h"
@@ -42,6 +43,7 @@
 #include "item_stats_ut.h"
 #include "join_deadlines_ut.h"
 #include "locomotion_bands_ut.h"
+#include "grass_clearing_ut.h"
 #include "level_object_ut.h"
 #include "light_api_ut.h"
 #include "missile_ut.h"
@@ -70,8 +72,12 @@
 #include "native_keybinds_ut.h"
 #include "world_builder_authoring_ut.h"
 #include "world_builder_editor_preferences_ut.h"
+#include "world_builder_figure_ut.h"
+#include "world_builder_poses_ut.h"
 #include "world_builder_keymap_ut.h"
+#include "world_builder_grass_ut.h"
 #include "world_builder_lights_ut.h"
+#include "world_builder_plants_ut.h"
 #include "world_builder_selection_ut.h"
 #endif
 
@@ -480,6 +486,9 @@ int main(int argc, char **argv) {
         if (suite == "door-api") {
             return RunDoorApiSuite();
         }
+        if (suite == "dice-npc") {
+            return RunDiceNpcSuite();
+        }
         if (suite == "stash-rpc") {
             return RunStashRpcSuite();
         }
@@ -493,9 +502,13 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     UNIT_MODULE(world_builder_authoring);
     UNIT_MODULE(world_builder_lights);
+    UNIT_MODULE(world_builder_plants);
+    UNIT_MODULE(world_builder_grass);
     UNIT_MODULE(world_builder_selection);
     UNIT_MODULE(world_builder_keymap);
     UNIT_MODULE(world_builder_editor_preferences);
+    UNIT_MODULE(world_builder_figure);
+    UNIT_MODULE(world_builder_poses);
     UNIT_MODULE(world_builder_mcp_files);
 #endif
     Framework::Logging::GetInstance()->PauseLogging(true);
@@ -526,6 +539,7 @@ int main(int argc, char **argv) {
     UNIT_MODULE(head_visibility);
     UNIT_MODULE(locomotion_bands);
     UNIT_MODULE(door_protocol);
+    UNIT_MODULE(grass_clearing);
     UNIT_MODULE(level_objects);
     UNIT_MODULE(world_objects);
     UNIT_MODULE(prop_physics);

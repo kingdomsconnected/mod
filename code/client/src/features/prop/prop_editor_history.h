@@ -3,6 +3,7 @@
 #include "prop_editor_areas.h"
 #include "prop_editor_document.h"
 #include "prop_editor_effects.h"
+#include "prop_editor_grass.h"
 #include "prop_editor_lights.h"
 #include "prop_editor_objects.h"
 #include "prop_editor_scene.h"
@@ -99,7 +100,9 @@ namespace KCDC::Features::Prop {
             LightDelete,
             LightMove,
             LightTuning,
-            Authored, // render-owned areas, patrols and saved camera views
+            GrassPlace,  // clearing `grass` was made in the terrain's grass
+            GrassDelete, // clearing `grass` was taken back
+            Authored,    // render-owned areas, patrols and saved camera views
         };
 
         Kind kind        = Kind::Place;
@@ -113,6 +116,7 @@ namespace KCDC::Features::Prop {
         PlacedObject object;
         PlacedEffect effect;
         PlacedLight light;
+        PlacedClearing grass;
 
         HistoryTransform before;
         HistoryTransform after;
@@ -268,9 +272,9 @@ namespace KCDC::Features::Prop {
         }
 
         /** False with nothing to undo. `label` says what was undone; `touched`, when given, the objects the step changed. */
-        bool Undo(EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, std::string &label, EditorLayers *layers = nullptr, std::vector<SelectionRef> *touched = nullptr);
+        bool Undo(EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, EditorGrass &grass, std::string &label, EditorLayers *layers = nullptr, std::vector<SelectionRef> *touched = nullptr);
 
-        bool Redo(EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, std::string &label, EditorLayers *layers = nullptr, std::vector<SelectionRef> *touched = nullptr);
+        bool Redo(EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, EditorGrass &grass, std::string &label, EditorLayers *layers = nullptr, std::vector<SelectionRef> *touched = nullptr);
 
         /** The objects one step changed, in the step's order, each once. Area, route and layer edits name none. */
         static std::vector<SelectionRef> TouchedObjects(const HistoryStep &step) {
@@ -295,6 +299,8 @@ namespace KCDC::Features::Prop {
                 case HistoryAction::Kind::LightMove:
                 case HistoryAction::Kind::LightTuning:
                 case HistoryAction::Kind::LightGroup: touched.Insert(SelectionRef {SelectionKind::Light, action.id}); break;
+                case HistoryAction::Kind::GrassPlace:
+                case HistoryAction::Kind::GrassDelete:
                 case HistoryAction::Kind::Layers:
                 case HistoryAction::Kind::Authored: break;
                 }
@@ -362,8 +368,8 @@ namespace KCDC::Features::Prop {
             std::string error;
             layers.Assign({ObjectLayerKey(action)}, layers.Find(action.layerId) ? action.layerId : "default", error);
         }
-        static void Revert(const HistoryAction &action, EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights);
-        static void Replay(const HistoryAction &action, EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights);
+        static void Revert(const HistoryAction &action, EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, EditorGrass &grass);
+        static void Replay(const HistoryAction &action, EditorScene &scene, WorldObjects &world, EditorEffects &effects, EditorLights &lights, EditorGrass &grass);
 
         const std::string _nothing;
         std::shared_ptr<const AuthoredHistoryState> _authoredRestore;

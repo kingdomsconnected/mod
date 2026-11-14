@@ -14,6 +14,7 @@ add_executable(KCDCTests
     inventory_gameplay_ut.cpp
     npc_api_ut.cpp
     door_api_ut.cpp
+    dice_npc_ut.cpp
     npc_inventory_ut.cpp
     animal_gamemode_ut.cpp
     alchemy_tests_main.cpp
@@ -95,7 +96,7 @@ if(TARGET KCDCGamemode)
 endif()
 
 set(KCDC_TEST_RUNTIME "${CMAKE_CURRENT_BINARY_DIR}/test-runtime")
-foreach(suite gathering-api area-transfer player-hit-transfer world-resource world-resource-empty patrol-api stash-rpc cook-pot-rpc npc-api door-api)
+foreach(suite gathering-api area-transfer player-hit-transfer world-resource world-resource-empty patrol-api stash-rpc cook-pot-rpc npc-api door-api dice-npc)
     file(MAKE_DIRECTORY "${KCDC_TEST_RUNTIME}/${suite}")
 endforeach()
 add_custom_target(RunKCDCTests
@@ -111,6 +112,7 @@ add_custom_target(RunKCDCTests
     COMMAND ${CMAKE_COMMAND} -E chdir "${KCDC_TEST_RUNTIME}/cook-pot-rpc" $<TARGET_FILE:KCDCTests> --suite cook-pot-rpc
     COMMAND ${CMAKE_COMMAND} -E chdir "${KCDC_TEST_RUNTIME}/npc-api" $<TARGET_FILE:KCDCTests> --suite npc-api
     COMMAND ${CMAKE_COMMAND} -E chdir "${KCDC_TEST_RUNTIME}/door-api" $<TARGET_FILE:KCDCTests> --suite door-api
+    COMMAND ${CMAKE_COMMAND} -E chdir "${KCDC_TEST_RUNTIME}/dice-npc" $<TARGET_FILE:KCDCTests> --suite dice-npc
     COMMAND "${KCDC_TEST_NODE}" --test "${CMAKE_CURRENT_SOURCE_DIR}/../../resources/kcdc-gamemode/tests/npcdemo.test.cjs"
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
     DEPENDS KCDCTests

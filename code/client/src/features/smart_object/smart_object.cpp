@@ -56,7 +56,7 @@ namespace KCDC::Features::SmartObject {
         }
     } // namespace
 
-    SmartObjectAssembly::BuildResult SmartObjectAssembly::Build(const Shared::Game::SmartObjectBlueprint &blueprint, std::uint64_t guidBase, const glm::vec3 &position, const glm::quat &rotation) {
+    SmartObjectAssembly::BuildResult SmartObjectAssembly::Build(const Shared::Game::SmartObjectBlueprint &blueprint, std::uint64_t guidBase, const glm::vec3 &position, const glm::quat &rotation, bool bare) {
         Destroy();
         auto *entitySystem = SDK::IEntitySystem::GetInstance();
         auto *registry     = entitySystem != nullptr ? entitySystem->GetClassRegistry() : nullptr;
@@ -66,6 +66,7 @@ namespace KCDC::Features::SmartObject {
         const glm::quat facing = glm::normalize(rotation);
         _guidBase              = guidBase;
         _blueprint             = &blueprint;
+        _bare                  = bare;
 
         // Every part spawned, but not initialised: its properties and its
         // links go on first, as the level loader puts them on before any of
@@ -171,9 +172,10 @@ namespace KCDC::Features::SmartObject {
             }
         }
 
-        // The furniture: solid, as the level's own brushes are.
-        _brushes.resize(blueprint.brushCount);
-        for (std::size_t index = 0; index < blueprint.brushCount; ++index) {
+        // The furniture: solid, as the level's own brushes are. A bare one
+        // leaves it out, for the prop that stands there in its place.
+        _brushes.resize(bare ? 0 : blueprint.brushCount);
+        for (std::size_t index = 0; index < _brushes.size(); ++index) {
             const Shared::Game::SmartObjectBrush &brush = blueprint.brushes[index];
             SDK::Vec3 brushPosition {};
             SDK::Quat brushRotation {};
@@ -286,6 +288,10 @@ namespace KCDC::Features::SmartObject {
                 SDK::AABB box {};
                 entity->GetWorldBounds(box);
                 include(box);
+                if (_bare) {
+                    const SDK::Vec3 at = entity->GetWorldPos();
+                    include(SDK::AABB {SDK::Vec3 {at.x - kBarePartReach, at.y - kBarePartReach, at.z - kBarePartReach}, SDK::Vec3 {at.x + kBarePartReach, at.y + kBarePartReach, at.z + kBarePartReach}});
+                }
             }
         }
         for (const KCDC::Common::Spawn::StaticBrush &brush : _brushes) {
@@ -339,8 +345,10 @@ namespace KCDC::Features::SmartObject {
             Framework::Logging::GetLogger(kLogger)->error("Smart object {} names blueprint {}, which this build's catalog does not have", GetNetworkID(), blueprint);
             return;
         }
-        switch (_assembly.Build(*layout, PartGuid(0), position, rotation)) {
-        case SmartObjectAssembly::BuildResult::Built: Framework::Logging::GetLogger(kLogger)->info("Built smart object {} ('{}', serial {}) from {} part(s) and {} brush(es)", GetNetworkID(), layout->name, serial, layout->partCount, layout->brushCount); break;
+        switch (_assembly.Build(*layout, PartGuid(0), position, rotation, bare)) {
+        case SmartObjectAssembly::BuildResult::Built:
+            Framework::Logging::GetLogger(kLogger)->info("Built smart object {} ('{}', serial {}) from {} part(s) and {} brush(es)", GetNetworkID(), layout->name, serial, layout->partCount, bare ? std::size_t {0} : layout->brushCount);
+            break;
         case SmartObjectAssembly::BuildResult::Refused: _refused = true; break;
         case SmartObjectAssembly::BuildResult::Retry: break;
         }

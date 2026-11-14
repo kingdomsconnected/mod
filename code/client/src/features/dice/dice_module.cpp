@@ -2,6 +2,7 @@
 
 #include "core/application.h"
 #include "features/audio/audio_range.h"
+#include "features/npc/npc.h"
 #include "features/player/player.h"
 #include "sdk/cryengine/3dengine/i_stat_obj.h"
 #include "sdk/cryengine/scaleform/i_flash_ui.h"
@@ -596,7 +597,7 @@ namespace KCDC::Features::Dice {
 
     bool DiceModule::SilencesBark(const SDK::wh::entitymodule::C_Actor *actor) const {
         SDK::wh::playermodule::C_DiceGameModel *model = Model();
-        return _phase == Phase::Seated && model != nullptr && actor != nullptr && model->GetPlayer(1) != nullptr && actor == model->GetPlayer(1)->GetActor();
+        return _phase == Phase::Seated && !_opponentIsNpc && model != nullptr && actor != nullptr && model->GetPlayer(1) != nullptr && actor == model->GetPlayer(1)->GetActor();
     }
 
     void DiceModule::InstallRPCs() {
@@ -658,8 +659,30 @@ namespace KCDC::Features::Dice {
 
     bool DiceModule::TryStart() {
         SDK::wh::entitymodule::C_Human *local = KCDC::Common::LocalHumanActor();
-        auto *opponent                        = KCDC::Common::FindReplicaById<KCDC::Features::Player::Human>(_opponentNetworkId);
-        if (local == nullptr || opponent == nullptr || opponent->GetEntityId() == 0 || opponent->ResolveActor() == nullptr) {
+        if (local == nullptr) {
+            return false;
+        }
+        // The opponent is another player's copy or one of the server's NPCs;
+        // a network id names one entity, so the two cannot be confused.
+        SDK::EntityId opponentEntityId = 0;
+        std::string opponentName;
+        bool opponentIsNpc = false;
+        if (auto *opponent = KCDC::Common::FindReplicaById<KCDC::Features::Player::Human>(_opponentNetworkId)) {
+            if (opponent->ResolveActor() != nullptr) {
+                opponentEntityId = opponent->GetEntityId();
+                opponentName     = opponent->nickname;
+            }
+        }
+        else if (auto *npc = KCDC::Common::FindReplicaById<KCDC::Features::Npc::Npc>(_opponentNetworkId)) {
+            // Seated only once its body is dressed and animated: the table
+            // plays interactive actions on it from its first frame.
+            if (npc->alive && npc->IsBodyReady()) {
+                opponentEntityId = npc->GetEntityId();
+                opponentName     = npc->name;
+                opponentIsNpc    = true;
+            }
+        }
+        if (opponentEntityId == 0) {
             return false;
         }
         const SDK::EntityId table = FindTable(_anchor);
@@ -673,7 +696,8 @@ namespace KCDC::Features::Dice {
 
         // Ours before the native runs, so the detours it reaches know it.
         _dice             = dice;
-        _opponentEntityId = opponent->GetEntityId();
+        _opponentEntityId = opponentEntityId;
+        _opponentIsNpc    = opponentIsNpc;
         _phase            = Phase::Seated;
         if (!dice->StartGameWithTargetScore(table, _opponentEntityId, _targetScore, kNoBadge, true)) {
             Framework::Logging::GetLogger(kLogger)->error("Match {}: the game would not start a dice game against entity {:#x} on table {:#x}", _matchId, _opponentEntityId, table);
@@ -682,7 +706,7 @@ namespace KCDC::Features::Dice {
             Clear();
             return false;
         }
-        Framework::Logging::GetLogger(kLogger)->info("Match {}: seated at table {:#x} against '{}' (entity {:#x})", _matchId, table, opponent->nickname, _opponentEntityId);
+        Framework::Logging::GetLogger(kLogger)->info("Match {}: seated at table {:#x} against {} '{}' (entity {:#x})", _matchId, table, _opponentIsNpc ? "NPC" : "player", opponentName, _opponentEntityId);
         return true;
     }
 
@@ -840,6 +864,7 @@ namespace KCDC::Features::Dice {
         _firstSeat            = 0;
         _opponentNetworkId    = 0;
         _opponentEntityId     = 0;
+        _opponentIsNpc        = false;
         _targetScore          = 0;
         _anchor               = {};
         _dice                 = nullptr;

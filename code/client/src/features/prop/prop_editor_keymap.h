@@ -115,6 +115,7 @@ namespace KCDC::Features::Prop {
         ToggleBrush,
         ToggleLasso,
         SelectSimilar,
+        FigureAtCursor,
         Count,
     };
 
@@ -148,6 +149,7 @@ namespace KCDC::Features::Prop {
             {"toggleBrush", "Brush selection on or off", {ImGuiKey_B}, {ImGuiKey_B}},
             {"toggleLasso", "Drag selects by box or by lasso", {ImGuiKey_L}, {ImGuiKey_L}},
             {"selectSimilar", "Select similar nearby", {}, {}},
+            {"figureAtCursor", "Stand the scale figure under the cursor", {ImGuiKey_H}, {ImGuiKey_H}},
         }};
         return actions;
     }

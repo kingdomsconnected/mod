@@ -170,7 +170,7 @@ namespace KCDC::Scripting {
         if (edit == nullptr) {
             return std::string();
         }
-        return edit->kind == Shared::Game::LevelEditKind::Entity ? "entity" : "brush";
+        return Shared::Game::LevelEditKindToString(edit->kind);
     }
 
     std::string LevelEdit::GetName() const {
@@ -237,7 +237,7 @@ namespace KCDC::Scripting {
         auto &_class = _classes[isolate];
         if (!_class) {
             _class = std::make_unique<v8pp::class_<LevelEdit>>(isolate, ServerCatalog(), "LevelEdit",
-                "One change the server makes, for every player, to an object the level itself placed -- a brush, a tree or a level entity taken out of the world, moved, swapped for another mesh, or a mix of those. It is what a World Builder map's `world` array carries. `WorldRayHit.levelObject` names the object a trace met in the form `apply` takes.");
+                "One change the server makes, for every player, to an object the level itself placed -- a brush, a tree or a level entity taken out of the world, moved, swapped for another mesh, or a mix of those -- or to the grass: the tall grass, flowers and ferns the level bakes into its terrain are not objects, and a `grass` edit takes out every one of them rooted in a box. It is what a World Builder map's `world` array carries. `WorldRayHit.levelObject` names the object a trace met in the form `apply` takes.");
             _class->auto_wrap_objects(true);
             _class->ctor<std::uint64_t>(v8pp::metadata::docs("void", {v8pp::metadata::param("id", "number", false, "Network entity identifier.")}, "Wraps an edit the server already holds; use LevelEdit.apply to make one, or WorldResource for a whole export."))
                 .function("toString", &LevelEdit::ToString, v8pp::metadata::docs("string", {}, "Formats this edit for logging and debugging.", "Its id, kind, object and what it does to it."));
@@ -249,7 +249,7 @@ namespace KCDC::Scripting {
                         v8pp::metadata::param("rotation", "Quaternion | Vector3", true, "Its orientation: a Quaternion, or Euler angles in degrees. Left out, it keeps the last move's."),
                         v8pp::metadata::param("scale", "number | Vector3", true, "A uniform scale or one per axis, from 0.01 to 100. Left out, it keeps the last move's."),
                     },
-                    "Moves the object for every player, collision included.", "False for a gone edit or a transform that is not finite."));
+                    "Moves the object for every player, collision included.", "False for a gone edit, a transform that is not finite, or a grass edit, whose box is fixed when it is applied."));
             _class->prototype_function("clearMove", &JS_ClearMove, v8pp::metadata::docs("void", {}, "Puts the object back where the level placed it, keeping it out of the world if the edit takes it out."));
             _class->prototype_function("restore", &JS_Restore, v8pp::metadata::docs("void", {}, "Drops the edit: every player gets the object back exactly as the level had it, collision included."));
             _class->prototype_function("toJSON", &JS_ToJSON,
@@ -258,16 +258,16 @@ namespace KCDC::Scripting {
 
             _class->property("id", &LevelEdit::GetId, v8pp::metadata::property_docs("number", "Immutable network entity identifier."));
             _class->property("exists", &LevelEdit::Exists, v8pp::metadata::property_docs("boolean", "False once the edit has been restored; every other read then returns its empty value."));
-            _class->property("kind", &LevelEdit::GetKind, v8pp::metadata::property_docs("'brush' | 'entity'", "Whether the object is a brush, found by its mesh and where the level put it, or a level entity, found by its EntityGuid."));
-            _class->property("name", &LevelEdit::GetName, v8pp::metadata::property_docs("string", "A brush's mesh path, or the name the level gives the entity."));
+            _class->property("kind", &LevelEdit::GetKind, v8pp::metadata::property_docs("'brush' | 'entity' | 'grass'", "Whether the object is a brush, found by its mesh and where the level put it, a level entity, found by its EntityGuid, or a box of the terrain's grass."));
+            _class->property("name", &LevelEdit::GetName, v8pp::metadata::property_docs("string", "A brush's mesh path, or the name the level gives the entity. Empty for grass."));
             _class->property("guid", &LevelEdit::GetGuid, v8pp::metadata::property_docs("string", "An entity's level EntityGuid as sixteen lowercase hex digits; empty for a brush."));
             _class->property("virtualWorld", &LevelEdit::GetVirtualWorld, v8pp::metadata::property_docs("number", "The virtual world whose players see the edit, fixed when it was applied."));
             _class->property("hidden", &LevelEdit::IsHidden, &LevelEdit::SetHidden,
-                v8pp::metadata::property_docs("boolean", "Whether the object is taken out of the world: not drawn and not solid. Assignment takes it out or puts it back for every player, keeping any move."));
+                v8pp::metadata::property_docs("boolean", "Whether the object is taken out of the world: not drawn and not solid. Assignment takes it out or puts it back for every player, keeping any move. For grass, whether the plants in the box are taken out."));
             _class->property("moved", &LevelEdit::IsMoved, v8pp::metadata::property_docs("boolean", "Whether the object stands somewhere other than where the level placed it; `move` and `clearMove` change it."));
             _class->property("model", &LevelEdit::GetModel, &LevelEdit::SetModel,
                 v8pp::metadata::property_docs("string",
-                    "The mesh standing in the object's place, or empty. Assigning a prop catalog path or a mesh this server streams swaps the object for it on every player: the object goes, collision included, and the mesh stands where it stood -- or where `move` put it -- as solid static scenery. A felled tree leaves its stump this way. Assigning an empty string gives the object back. Throws for any other path."));
+                    "The mesh standing in the object's place, or empty. Assigning a prop catalog path or a mesh this server streams swaps the object for it on every player: the object goes, collision included, and the mesh stands where it stood -- or where `move` put it -- as solid static scenery. A felled tree leaves its stump this way. Assigning an empty string gives the object back. Throws for any other path, and for a grass edit."));
         }
         return *_class;
     }
@@ -282,12 +282,14 @@ namespace KCDC::Scripting {
         }
 
         auto &definition = ServerCatalog().data_type("LevelEditDefinition");
-        definition.add_property("kind", v8pp::metadata::type{"'brush' | 'entity' | undefined", {}, true}, "What the object is; a brush when omitted. A brush has no identity of its own, so it is found by its mesh and where the level put it; a level entity by its EntityGuid.");
+        definition.add_property("kind", v8pp::metadata::type{"'brush' | 'entity' | 'grass' | undefined", {}, true}, "What the object is; a brush when omitted. A brush has no identity of its own, so it is found by its mesh and where the level put it; a level entity by its EntityGuid. Grass is no object: the edit is an upright box, `at`, `halfSize` and `yaw`, and with `hidden` every plant of the terrain's merged vegetation rooted in it goes -- tall grass, flowers, ferns -- except the ones a player can gather.");
         definition.add_property("name", v8pp::metadata::type{"string | undefined", {}, true}, "A brush's mesh path, `objects/...cgf`, as the World Builder shows it; required for a brush. An entity's name, kept for reading only.");
         definition.add_property("guid", v8pp::metadata::type{"string | undefined", {}, true}, "An entity's level EntityGuid as sixteen hex digits; required for an entity.");
         definition.add_property("class", v8pp::metadata::type{"string | undefined", {}, true}, "An entity's class, kept for reading only.");
-        definition.add_property("at", "Vector3 | number[]", "Where the level put the object: its pivot, matched within 5 cm. A brush's key, with its mesh.");
-        definition.add_property("hidden", v8pp::metadata::type{"boolean | undefined", {}, true}, "Whether it is taken out of the world: not drawn and not solid.");
+        definition.add_property("at", "Vector3 | number[]", "Where the level put the object: its pivot, matched within 5 cm. A brush's key, with its mesh. For grass, the centre of the box.");
+        definition.add_property("halfSize", v8pp::metadata::type {"Vector3 | number[] | undefined", {}, true}, "Grass only, and required for it: half the box along its own two ground axes and up, each from 0.01 to 128 metres. Make it tall enough to hold the ground the plants stand on.");
+        definition.add_property("yaw", v8pp::metadata::type {"number | undefined", {}, true}, "Grass only: the box's turn about the vertical in degrees, counter-clockwise seen from above. None when omitted.");
+        definition.add_property("hidden", v8pp::metadata::type{"boolean | undefined", {}, true}, "Whether it is taken out of the world: not drawn and not solid. A grass edit clears its box only while this is set.");
         definition.add_property("model", v8pp::metadata::type {"string | undefined", {}, true},
             "A mesh that stands in its place: a prop catalog path such as `objects/natural/vegetation/trees/stumps/stump_fagus_a.cgf`, or a mesh this server streams. The object goes out of the world, collision included, and this mesh stands where it stood -- or at `position` -- as solid static scenery.");
         definition.add_property("position", v8pp::metadata::type{"Vector3 | number[] | undefined", {}, true}, "Where it stands instead; present, the edit is a move.");
@@ -302,7 +304,7 @@ namespace KCDC::Scripting {
                     v8pp::metadata::param("virtualWorld", "number", true, "Optional virtual world whose players see it; the global one when omitted."),
                 },
                 "Takes an object the level placed out of the world, moves it, or swaps it for another mesh, for every player in the virtual world -- whenever they join, and however far away they are. Collision goes with it. An edit already made to the same object in that world is restated rather than doubled, so applying one twice changes nothing. Kept in memory only: apply it again on boot. A `WorldRayHit.levelObject` is a definition already: spread it and add what to do, as in `LevelEdit.apply({ ...hit.levelObject, model: stump })`.",
-                "The edit. Throws for a definition no client could find the object by, or a `model` no client could load."));
+                "The edit. Throws for a definition no client could find the object by, a `model` no client could load, or a grass box that is not finite and within its limits."));
         cls.static_function("all", &JS_All, v8pp::metadata::docs("LevelEdit[]", {v8pp::metadata::param("virtualWorld", "number", true, "Optional virtual world to list; omitted lists every one of them.")}, "Lists every edit the server currently has.", "One handle per live edit, in no particular order."));
         cls.static_function("getById", &JS_GetById, v8pp::metadata::docs("LevelEdit | null", {v8pp::metadata::param("id", "number", false, "Network entity identifier.")}, "Looks an edit up by its network entity ID.", "The edit, or null when no live edit has that ID."));
         cls.static_function("restoreAll", &JS_RestoreAll,

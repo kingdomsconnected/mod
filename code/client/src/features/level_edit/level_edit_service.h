@@ -24,6 +24,9 @@ namespace KCDC::Features::LevelEdit {
      * editor's own so a map the player edits locally never saves what the
      * server did, and the server's edits never land in the player's undo.
      *
+     * A grass edit names no object and goes to `GrassModule` instead, which
+     * clears the box in the terrain's merged vegetation.
+     *
      * Driven by what the wire changes, never by looking at every replica:
      * the replicas queue themselves. Nothing is reported back.
      */
@@ -58,10 +61,16 @@ namespace KCDC::Features::LevelEdit {
         /** Puts one replica's object back and forgets it. */
         void Restore(std::uint64_t networkId);
 
+        /** Takes back every clearing the server's grass edits made. */
+        void RestoreGrass();
+
         KCDC::Features::Prop::WorldObjects _objects;
 
         /** Replica NetworkID -> the edit in `_objects` it made. */
         std::unordered_map<std::uint64_t, std::uint64_t> _applied;
+
+        /** Replica NetworkID -> the clearing its grass edit made in `GrassModule`. */
+        std::unordered_map<std::uint64_t, std::uint64_t> _grass;
 
         std::mutex _pendingMutex;
         std::unordered_set<std::uint64_t> _pendingApplies;

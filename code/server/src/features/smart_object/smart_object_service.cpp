@@ -122,6 +122,10 @@ namespace KCDC::Features::SmartObject {
             error = "the name is longer than 64 bytes";
             return nullptr;
         }
+        if (definition.bare && !Shared::Game::SmartObjectStandsBare(*blueprint)) {
+            error = "'" + std::string(blueprint->name) + "' cannot stand bare: it has no furniture apart from its own entities";
+            return nullptr;
+        }
         auto *replication = Framework::CoreModules::GetReplication();
         auto *object      = replication != nullptr ? replication->CreateEntity<Shared::Entities::SmartObjectEntity>() : nullptr;
         if (object == nullptr) {
@@ -132,6 +136,7 @@ namespace KCDC::Features::SmartObject {
         const glm::quat rotation = glm::normalize(definition.rotation);
         object->blueprint        = Shared::Game::SmartObjectBlueprintIndex(blueprint);
         object->serial           = _nextSerial++;
+        object->bare             = definition.bare;
         object->position         = definition.position;
         object->rotation         = rotation;
         object->streaming.range  = Shared::Entities::SmartObjectEntity::kStreamRange;
@@ -184,7 +189,8 @@ namespace KCDC::Features::SmartObject {
         }
 
         _placed.emplace(placed->networkId, std::move(placed));
-        Framework::Logging::GetLogger(kLogger)->info("Placed smart object {} ('{}', serial {}) in world {} at {:.2f}, {:.2f}, {:.2f}", object->GetNetworkID(), blueprint->name, object->serial, virtualWorld, definition.position.x, definition.position.y, definition.position.z);
+        Framework::Logging::GetLogger(kLogger)->info("Placed smart object {} ('{}'{}, serial {}) in world {} at {:.2f}, {:.2f}, {:.2f}", object->GetNetworkID(), blueprint->name, definition.bare ? ", bare" : "", object->serial, virtualWorld, definition.position.x,
+            definition.position.y, definition.position.z);
         return object;
     }
 

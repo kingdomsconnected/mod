@@ -38,6 +38,30 @@ MODULE(horse_gait, {
         EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::StepHorseHeading(0.0F, 2.0F, 2.0F, 0.1F, 1.5708F), 2.0F), true);
     });
 
+    IT("carries a copy's turn from one frame to the next while its body has not taken it", {
+        // Standing at 125 frames a second, the body 0.3 rad off and not turning: stepped from
+        // the body the request is the same 0.9 degrees every frame, which the game does not play.
+        float fromBody = 0.0F;
+        float carried  = 0.0F;
+        for (int frame = 0; frame < 30; ++frame) {
+            fromBody = KCDC::Shared::Game::StepHorseHeading(0.0F, 0.3F, 2.0F, 0.008F, 1.5708F);
+            carried  = KCDC::Shared::Game::StepHorseHeading(KCDC::Shared::Game::HorseHeadingStart(0.0F, carried, 0.3F, 2.0F, 0.1F, 1.5708F), 0.3F, 2.0F, 0.008F, 1.5708F);
+        }
+        EQUALS(HorseGaitTests::Near(fromBody, 0.016F), true);
+        // Carried, it grows to a tenth of a second of turning ahead of the body, and one step.
+        EQUALS(HorseGaitTests::Near(carried, 0.2F + 0.016F), true);
+
+        // A body that took what it was asked is stepped from where it is, as before.
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseHeadingStart(0.05F, 0.05F, 0.2F, 0.72F, 0.1F, 1.5708F), 0.05F), true);
+        // Never past the target, never away from it, and the short way round the circle.
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseHeadingStart(0.0F, 0.05F, 0.01F, 0.72F, 0.1F, 1.5708F), 0.01F), true);
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseHeadingStart(0.0F, 0.05F, -0.1F, 0.72F, 0.1F, 1.5708F), 0.0F), true);
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseHeadingStart(0.0F, -0.05F, -0.1F, 0.72F, 0.1F, 1.5708F), -0.05F), true);
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseHeadingStart(3.1F, -3.1F, -3.0F, 2.0F, 0.1F, 1.5708F), 3.1831853F), true);
+        // A turn no clip could play is left to the step, which takes it whole.
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseHeadingStart(0.0F, 0.1F, 2.0F, 2.0F, 0.1F, 1.5708F), 0.0F), true);
+    });
+
     IT("picks the style for a speed as the game does: the first whose speed reaches it", {
         EQUALS(KCDC::Shared::Game::HorseMoveStyleForSpeed(0.0F), 0);
         EQUALS(KCDC::Shared::Game::HorseMoveStyleForSpeed(2.3F), 0);
@@ -112,5 +136,17 @@ MODULE(horse_gait, {
         EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::LimitHorseSteerBend(0.1F, 0.35F, 0.0F, 0.0F, gallop), 0.1F), true);
         // A small step is taken whole.
         EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::LimitHorseSteerBend(0.1F, 0.105F, 0.0F, 0.02F, gallop), 0.105F), true);
+    });
+
+    IT("steers a ridden copy onto its owner's facing through its rider's stick", {
+        // A tenth of a radian to the left of the body: a quarter of the stick, to the left.
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseSteerStick(0.0F, 0.1F, 2.5F, 0.5F, 0.009F, 1.5708F), -0.25F), true);
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseSteerStick(0.0F, -0.1F, 2.5F, 0.5F, 0.009F, 1.5708F), 0.25F), true);
+        // Held to half the stick, and the short way round the circle.
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseSteerStick(0.0F, 1.0F, 2.5F, 0.5F, 0.009F, 1.5708F), -0.5F), true);
+        EQUALS(HorseGaitTests::Near(KCDC::Shared::Game::HorseSteerStick(3.1F, -3.1F, 2.5F, 0.5F, 0.009F, 1.5708F), -0.2079632F), true);
+        // Left alone where it already faces its owner's way, and where the turn is taken whole.
+        EQUALS(KCDC::Shared::Game::HorseSteerStick(0.0F, 0.005F, 2.5F, 0.5F, 0.009F, 1.5708F), 0.0F);
+        EQUALS(KCDC::Shared::Game::HorseSteerStick(0.0F, 2.0F, 2.5F, 0.5F, 0.009F, 1.5708F), 0.0F);
     });
 });

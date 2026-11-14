@@ -51,6 +51,9 @@ namespace KCDC::Features::Camera {
         // inside a head it can see.
         constexpr float kHeadHideDistance = 0.6F;
 
+        /** How long the orbit waits before asking for the look again after being refused it. */
+        constexpr std::int64_t kOrbitRetryMicroseconds = 5000000;
+
         std::int64_t NowMicroseconds() {
             return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
         }
@@ -199,6 +202,9 @@ namespace KCDC::Features::Camera {
     void CameraControlService::Update() {
         if (!_active) {
             if (_shot) {
+                // A shot films from where it was told to, and the player's
+                // look is their own again while it does.
+                _orbit.End(/*alignView=*/true);
                 UpdateShot();
             }
             else if (_thirdPerson) {
@@ -262,6 +268,11 @@ namespace KCDC::Features::Camera {
     void CameraControlService::Reset() {
         Disable(/*keepPosition=*/false, EndReason::SessionOver);
 
+        // Nothing to align: the body the look belonged to goes with the session.
+        _orbit.End(/*alignView=*/false);
+        _orbitTickMicroseconds  = 0;
+        _orbitRetryMicroseconds = 0;
+
         // The requests belong to the session that made them, like the view.
         // The shot first, so the third-person camera does not inherit it.
         if (_shot) {
@@ -278,7 +289,16 @@ namespace KCDC::Features::Camera {
         _thirdPersonOptions.distance = std::clamp(options.distance, kMinThirdPersonDistance, kMaxThirdPersonDistance);
         _thirdPersonOptions.height   = std::clamp(options.height, -kMaxThirdPersonHeight, kMaxThirdPersonHeight);
         _thirdPersonOptions.shoulder = std::clamp(options.shoulder, -kMaxThirdPersonShoulder, kMaxThirdPersonShoulder);
-        _thirdPerson                 = true;
+        _thirdPersonOptions.orbit        = options.orbit;
+        _thirdPersonOptions.orbitOptions = options.orbitOptions;
+        _thirdPerson                     = true;
+
+        // Asked for again, so a refusal is worth another try now; an orbit
+        // already steering only takes the new settings.
+        _orbitRetryMicroseconds = 0;
+        if (_orbit.IsSteering()) {
+            _orbit.SetOptions(options.orbitOptions);
+        }
     }
 
     void CameraControlService::DisableThirdPerson() {
@@ -286,6 +306,10 @@ namespace KCDC::Features::Camera {
             return;
         }
         _thirdPerson = false;
+
+        // The game's own camera takes over looking where this one looked.
+        _orbit.End(/*alignView=*/true);
+        _orbitTickMicroseconds = 0;
 
         // A flight owns the camera while it runs, and hands it back itself;
         // so does a shot, and with it the player's head.
@@ -324,14 +348,70 @@ namespace KCDC::Features::Camera {
         return _camera.IsActive() || _camera.Take();
     }
 
+    bool CameraControlService::OrbitMaySteer() const {
+        auto *app                             = Core::gApplication.get();
+        SDK::wh::entitymodule::C_Human *actor = KCDC::Common::LocalHumanActor();
+        if (app == nullptr || actor == nullptr) {
+            return false;
+        }
+
+        // In the saddle the game's own camera films the rider; with a weapon
+        // or fists up the fight turns the body from the view, and aiming
+        // needs the two to agree; under a camera limit or a rotation lock --
+        // a seat, a lean, a scripted action -- the facing is not the keys'.
+        // In the saddle the orbit only swings the camera (OrbitCamera::SetRiding):
+        // the rider's facing stays the game's, so the yaw lock does not count.
+        if (app->GetPlayerService().Combat().fistsUp) {
+            return false;
+        }
+        return app->GetHorseService().SeatOf(actor->GetEntityId()) != 0 || actor->TakesYawDelta();
+    }
+
+    void CameraControlService::SettleOrbit() {
+        if (!_thirdPersonOptions.orbit || !OrbitMaySteer()) {
+            _orbit.End(/*alignView=*/true);
+            _orbitTickMicroseconds = 0;
+            return;
+        }
+
+        {
+            SDK::wh::entitymodule::C_Human *actor = KCDC::Common::LocalHumanActor();
+            _orbit.SetRiding(actor != nullptr && Core::gApplication->GetHorseService().SeatOf(actor->GetEntityId()) != 0);
+        }
+
+        const std::int64_t now = NowMicroseconds();
+        if (!_orbit.IsSteering()) {
+            SDK::Vec3 eye {};
+            SDK::Vec3 forward {};
+            if (now < _orbitRetryMicroseconds || !OwnViewPose(eye, forward)) {
+                return;
+            }
+            if (!_orbit.Begin(forward, _thirdPersonOptions.orbitOptions)) {
+                _orbitRetryMicroseconds = now + kOrbitRetryMicroseconds;
+                return;
+            }
+            _orbitTickMicroseconds = 0;
+        }
+
+        const float delta      = _orbitTickMicroseconds == 0 ? 0.0F : std::clamp(static_cast<float>(now - _orbitTickMicroseconds) * 1e-6F, 0.0F, kMaxFrameSeconds);
+        _orbitTickMicroseconds = now;
+        _orbit.Update(delta);
+    }
+
     void CameraControlService::FollowBehind() {
         if (CameraMustYield()) {
             if (_camera.IsActive()) {
                 _camera.Release();
             }
             ShowHead(false);
+            // The page is filmed through the player's own view, which looks
+            // where the body does: the look goes back with it.
+            _orbit.End(/*alignView=*/true);
+            _orbitTickMicroseconds = 0;
             return;
         }
+
+        SettleOrbit();
 
         SDK::Vec3 position {};
         SDK::Vec3 forward {};
@@ -383,6 +463,12 @@ namespace KCDC::Features::Camera {
         SDK::Vec3 eye {};
         if (body == nullptr || !OwnViewPose(eye, forward)) {
             return false;
+        }
+
+        // Orbiting, the camera looks where the mouse put it; the body's own
+        // view only says where it is facing.
+        if (_orbit.IsSteering()) {
+            forward = _orbit.GetForward();
         }
 
         // Right is level with the horizon, as the flight's basis is.

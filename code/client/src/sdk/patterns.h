@@ -247,6 +247,10 @@ namespace SDK {
         // Address of the global I3DEngine * holder.
         std::uint64_t I3DEngine__Instance = 0x0; // 0x18492D808
 
+        // Address of the global holder of the 3D engine's object manager,
+        // the owner of the vegetation-group table.
+        std::uint64_t CObjManager__Instance = 0x0; // 0x185496FB0
+
         // Address of the FlashUI registry pointer used by native page setup.
         std::uint64_t IFlashUI__Instance                   = 0x0; // 0x18492D938
         std::uint64_t CCryPak__OpenPackWithBindingRoot     = 0x0; // 0x180DA1A5C

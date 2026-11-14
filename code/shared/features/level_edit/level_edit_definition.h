@@ -1,5 +1,6 @@
 #pragma once
 
+#include "shared/features/grass/grass_clearing.h"
 #include "shared/scripting/level_guid.h"
 
 #include <glm/glm.hpp>
@@ -20,11 +21,22 @@ namespace KCDC::Shared::Game {
      */
     inline constexpr float kLevelEditKeySlack = 0.05F;
 
-    /** What a level edit is keyed by: the level gives an entity an identity, and a brush none. */
+    /** What a level edit is keyed by: the level gives an entity an identity, a brush none, and the grass is not objects at all. */
     enum class LevelEditKind : std::uint8_t {
         Brush,  // keyed by its mesh path and where the level put it
         Entity, // keyed by its level EntityGuid
+        Grass,  // a box of the terrain's merged vegetation, keyed by the box itself
     };
+
+    /** How a kind is spelled in a map's `world` array and by `levelEdit.kind`. */
+    inline const char *LevelEditKindToString(LevelEditKind kind) {
+        switch (kind) {
+        case LevelEditKind::Entity: return "entity";
+        case LevelEditKind::Grass: return "grass";
+        case LevelEditKind::Brush: break;
+        }
+        return "brush";
+    }
 
     /**
      * One change to an object the level itself placed -- taken out, moved,
@@ -40,8 +52,22 @@ namespace KCDC::Shared::Game {
         std::string name;       // the brush's mesh path, or the entity's name
         std::string className;  // Entity only, informational
 
-        /** Where the level put it: half of a brush's key. */
+        /** Where the level put it: half of a brush's key. For grass, the centre of the box. */
         glm::vec3 at {0.0F};
+
+        /**
+         * Grass only: half the box along its own two ground axes and up, and
+         * its turn about the vertical in degrees. With `at` they are the
+         * whole edit, key and all -- see `GrassClearing`. `hidden` takes the
+         * plants in the box out; nothing else applies to grass.
+         */
+        glm::vec3 halfSize {0.0F};
+        float yawDegrees = 0.0F;
+
+        /** The box a grass edit clears. */
+        GrassClearing Clearing() const {
+            return GrassClearing {at, halfSize, yawDegrees};
+        }
 
         bool hidden = false;
 
@@ -66,6 +92,9 @@ namespace KCDC::Shared::Game {
 
         /** Whether another run or another machine can find the object again from this. */
         bool HasKey() const {
+            if (kind == LevelEditKind::Grass) {
+                return Clearing().IsSane();
+            }
             return kind == LevelEditKind::Entity ? guid != 0 : !name.empty();
         }
     };
@@ -138,8 +167,17 @@ namespace KCDC::Shared::Game {
 
     /** The entry as a map's `world` array stores it: arrays for vectors, `[x, y, z, w]` for the rotation. */
     inline nlohmann::json LevelEditDefinitionToJson(const LevelEditDefinition &edit) {
+        if (edit.kind == LevelEditKind::Grass) {
+            return nlohmann::json {
+                {"kind", LevelEditKindToString(edit.kind)},
+                {"at", nlohmann::json::array({edit.at.x, edit.at.y, edit.at.z})},
+                {"halfSize", nlohmann::json::array({edit.halfSize.x, edit.halfSize.y, edit.halfSize.z})},
+                {"yaw", edit.yawDegrees},
+                {"hidden", edit.hidden},
+            };
+        }
         nlohmann::json entry {
-            {"kind", edit.kind == LevelEditKind::Entity ? "entity" : "brush"},
+            {"kind", LevelEditKindToString(edit.kind)},
             {"name", edit.name},
             {"at", nlohmann::json::array({edit.at.x, edit.at.y, edit.at.z})},
             {"hidden", edit.hidden},
@@ -177,17 +215,40 @@ namespace KCDC::Shared::Game {
         if (kind == "entity") {
             edit.kind = LevelEditKind::Entity;
         }
+        else if (kind == "grass") {
+            edit.kind = LevelEditKind::Grass;
+        }
         else if (kind.empty() || kind == "brush") {
             edit.kind = LevelEditKind::Brush;
         }
         else {
-            error = "kind must be 'brush' or 'entity', not '" + kind + "'";
+            error = "kind must be 'brush', 'entity' or 'grass', not '" + kind + "'";
             return false;
         }
 
         if (!LevelEditDefinitionJson::ReadVector(entry, "at", edit.at)) {
-            error = "at must be where the level put the object, as [x, y, z] or a Vector3";
+            error = edit.kind == LevelEditKind::Grass ? "at must be the centre of the box, as [x, y, z] or a Vector3" : "at must be where the level put the object, as [x, y, z] or a Vector3";
             return false;
+        }
+
+        if (edit.kind == LevelEditKind::Grass) {
+            if (!LevelEditDefinitionJson::ReadVector(entry, "halfSize", edit.halfSize)) {
+                error = "a grass edit needs halfSize, half the box along its two ground axes and up, as [x, y, z] or a Vector3";
+                return false;
+            }
+            if (const auto yaw = entry.find("yaw"); yaw != entry.end()) {
+                if (!yaw->is_number() || !std::isfinite(yaw->get<float>())) {
+                    error = "yaw must be the box's turn about the vertical, in degrees";
+                    return false;
+                }
+                edit.yawDegrees = yaw->get<float>();
+            }
+            if (!edit.HasKey()) {
+                error = "a grass edit's half sizes must each be between 0.01 and 128 metres";
+                return false;
+            }
+            edit.hidden = LevelEditDefinitionJson::ReadBool(entry, "hidden");
+            return true;
         }
 
         edit.name      = LevelEditDefinitionJson::ReadString(entry, "name");

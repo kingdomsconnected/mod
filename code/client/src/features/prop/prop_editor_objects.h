@@ -185,8 +185,13 @@ namespace KCDC::Features::Prop {
      */
     class WorldObjects final {
       public:
-        /** What is under a ray, across physics, octree and entities, which see different populations. */
-        WorldPick Pick(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, PickEffort effort, bool preferPhysics = true) const;
+        /**
+         * What is under a ray, across physics, octree and entities, which see
+         * different populations. `boundsExempt` names entities the two bounds
+         * passes leave out: only a collider answers for them here, because
+         * their owner tests their boxes itself.
+         */
+        WorldPick Pick(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, PickEffort effort, bool preferPhysics = true, const std::unordered_set<SDK::EntityId> *boundsExempt = nullptr) const;
 
         /**
          * The nearest plant whose box the ray enters within `maxDistance`. A
@@ -303,11 +308,11 @@ namespace KCDC::Features::Prop {
         static std::string MeshPath(const WorldEdit &edit);
 
       private:
-        /** Octree nodes near the ray. `avoid` drops boxes containing that point, `maxSpan` boxes larger than it, `plantsOnly` everything but vegetation. */
-        WorldPick PickFromOctree(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, const SDK::Vec3 *avoid, float maxSpan, bool plantsOnly = false) const;
+        /** Octree nodes near the ray. `avoid` drops boxes containing that point, `maxSpan` boxes larger than it, `plantsOnly` everything but vegetation, `exempt` nodes those entities own. */
+        WorldPick PickFromOctree(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, const SDK::Vec3 *avoid, float maxSpan, bool plantsOnly = false, const std::unordered_set<SDK::EntityId> *exempt = nullptr) const;
 
-        /** Every entity against its world box: the only pass that finds meshless-collider entities, and the costly one. */
-        WorldPick PickFromEntities(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, const SDK::Vec3 *avoid, float maxSpan) const;
+        /** Every entity but `exempt` against its world box: the only pass that finds meshless-collider entities, and the costly one. */
+        WorldPick PickFromEntities(const SDK::Vec3 &origin, const SDK::Vec3 &direction, float maxDistance, const SDK::Vec3 *avoid, float maxSpan, const std::unordered_set<SDK::EntityId> *exempt = nullptr) const;
 
         WorldEdit *FindMutable(std::uint64_t id);
 

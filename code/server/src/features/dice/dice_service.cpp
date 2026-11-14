@@ -1,6 +1,7 @@
 #include "features/dice/dice_service.h"
 
 #include "features/dice/dice_scripting.h"
+#include "features/npc/npc_verbs.h"
 #include "features/player/player_roster.h"
 #include "shared/features/player/player_entity.h"
 
@@ -86,7 +87,14 @@ namespace KCDC::Features::Dice {
         }
         Shared::Entities::HumanEntity *first  = Player::Players::Find(firstNetworkId);
         Shared::Entities::HumanEntity *second = Player::Players::Find(secondNetworkId);
-        if (first == nullptr || second == nullptr) {
+        // An NPC takes the second seat only: the first seat's client is the
+        // one that shows the table to everybody nearby.
+        Shared::Entities::NpcEntity *npc = second == nullptr ? Npc::Npcs::Find(secondNetworkId) : nullptr;
+        if (first == nullptr && Npc::Npcs::Find(firstNetworkId) != nullptr) {
+            error = "an NPC can only take the second seat";
+            return 0;
+        }
+        if (first == nullptr || (second == nullptr && npc == nullptr)) {
             error = "both players must be connected";
             return 0;
         }
@@ -94,11 +102,17 @@ namespace KCDC::Features::Dice {
             error = "a player cannot play against themselves";
             return 0;
         }
+        if (npc != nullptr && (!npc->alive || npc->IsAnimal())) {
+            error = "the NPC must be a living human";
+            return 0;
+        }
         if (MatchOf(firstNetworkId) != 0 || MatchOf(secondNetworkId) != 0) {
             error = "one of the players is already playing dice";
             return 0;
         }
-        if (first->GetVirtualWorld() != second->GetVirtualWorld() || glm::distance(first->position, second->position) > kMaxSeparation) {
+        const auto secondWorld         = second != nullptr ? second->GetVirtualWorld() : npc->GetVirtualWorld();
+        const glm::vec3 secondPosition = second != nullptr ? second->position : npc->position;
+        if (first->GetVirtualWorld() != secondWorld || glm::distance(first->position, secondPosition) > kMaxSeparation) {
             error = "the players must stand together at a dice table";
             return 0;
         }
@@ -118,6 +132,9 @@ namespace KCDC::Features::Dice {
         Match match(targetScore, firstSeat);
         match.matchId  = matchId;
         match.players  = {firstNetworkId, secondNetworkId};
+        if (npc != nullptr) {
+            match.scriptSeat = 1;
+        }
         match.deadline = Now() + kTurnTimeoutMs;
         QueueProgress(match, "diceTurnStart", firstSeat);
         const std::vector<Shared::RPC::DiceDeal> deals = DealPending(match);
@@ -127,9 +144,12 @@ namespace KCDC::Features::Dice {
         }
 
         // The anchor both clients search for the table around.
-        const glm::vec3 anchor = (first->position + second->position) * 0.5F;
+        const glm::vec3 anchor = (first->position + secondPosition) * 0.5F;
         for (std::uint8_t seat = 0; seat < 2; ++seat) {
             Shared::Entities::HumanEntity *player = seat == 0 ? first : second;
+            if (player == nullptr) {
+                continue;
+            }
             Shared::RPC::DiceMatchStart start;
             start.matchId           = matchId;
             start.localSeat         = seat;
@@ -146,7 +166,7 @@ namespace KCDC::Features::Dice {
             }
         }
 
-        Framework::Logging::GetLogger(kLogger)->info("Match {}: '{}' against '{}' to {}, seat {} throws first", matchId, first->nickname, second->nickname, targetScore, firstSeat);
+        Framework::Logging::GetLogger(kLogger)->info("Match {}: '{}' against '{}' to {}, seat {} throws first", matchId, first->nickname, second != nullptr ? second->nickname : npc->name, targetScore, firstSeat);
         _events.push_back([=] {
             Scripting::Events::DiceMatchStart(matchId, firstNetworkId, secondNetworkId, targetScore);
         });
@@ -164,6 +184,14 @@ namespace KCDC::Features::Dice {
         }
         SendToSeats(found->second, report);
         return true;
+    }
+
+    bool DiceService::Move(std::uint32_t matchId, std::uint8_t heldMask, bool pass) {
+        const auto found = _matches.find(matchId);
+        if (found == _matches.end() || found->second.scriptSeat == Shared::Game::Dice::kNoSeat || (heldMask & ~Shared::Game::Dice::kAllDiceMask) != 0) {
+            return false;
+        }
+        return Commit(found->second, found->second.scriptSeat, pass ? Shared::Game::Dice::MoveKind::Pass : Shared::Game::Dice::MoveKind::Continue, heldMask);
     }
 
     bool DiceService::Stop(std::uint32_t matchId) {
@@ -189,14 +217,30 @@ namespace KCDC::Features::Dice {
     }
 
     void DiceService::Update() {
-        // A seat that never moves forfeits; collected first, because ending
-        // tells scripts, and a handler may start or stop another match.
-        const std::uint64_t now = Now();
+        Sweep(Now());
+    }
+
+    void DiceService::Sweep(std::uint64_t now) {
+        // A seat that never moves forfeits, whoever holds it, and an NPC that
+        // was removed or killed has left the table; collected first, because
+        // ending tells scripts, and a handler may start or stop another match.
         std::vector<std::pair<std::uint32_t, std::uint8_t>> expired;
+        std::vector<std::pair<std::uint32_t, std::uint8_t>> deserted;
         for (const auto &[matchId, match] : _matches) {
+            if (match.scriptSeat != Shared::Game::Dice::kNoSeat) {
+                const Shared::Entities::NpcEntity *npc = Npc::Npcs::Find(match.players[match.scriptSeat]);
+                if (npc == nullptr || !npc->alive) {
+                    deserted.emplace_back(matchId, static_cast<std::uint8_t>(match.scriptSeat ^ 1));
+                    continue;
+                }
+            }
             if (now >= match.deadline) {
                 expired.emplace_back(matchId, static_cast<std::uint8_t>(match.table.Turn() ^ 1));
             }
+        }
+        for (const auto &[matchId, winner] : deserted) {
+            Framework::Logging::GetLogger(kLogger)->info("Match {}: the NPC at the table is gone", matchId);
+            End(matchId, Shared::Game::Dice::EndReason::Left, winner);
         }
         for (const auto &[matchId, winner] : expired) {
             Framework::Logging::GetLogger(kLogger)->info("Match {}: the seat to play went silent", matchId);
@@ -224,56 +268,65 @@ namespace KCDC::Features::Dice {
             return;
         }
 
-        const auto kind = static_cast<Shared::Game::Dice::MoveKind>(move.kind);
-        const bool due  = move.moveIndex == match->moves && seat == match->table.Turn() && !match->table.ThrowNeeded();
-        const auto turnScore = match->table.TurnScore();
-        const auto scored    = due ? match->table.Move(kind, move.heldMask) : std::nullopt;
-        if (!scored.has_value()) {
-            Framework::Logging::GetLogger(kLogger)->warn("Match {}: refused move {} from seat {} (kind {}, held {:#04x})", match->matchId, move.moveIndex, seat, move.kind, move.heldMask);
+        // Read before the commit, which may end the match and take it away.
+        const std::uint32_t matchId = match->matchId;
+        const std::uint64_t moverId = match->players[seat];
+        if (move.moveIndex != match->moves || !Commit(*match, seat, static_cast<Shared::Game::Dice::MoveKind>(move.kind), move.heldMask)) {
+            Framework::Logging::GetLogger(kLogger)->warn("Match {}: refused move {} from seat {} (kind {}, held {:#04x})", matchId, move.moveIndex, seat, move.kind, move.heldMask);
             Shared::RPC::DiceRefuse refuse;
-            refuse.matchId                       = match->matchId;
+            refuse.matchId                       = matchId;
             refuse.moveIndex                     = move.moveIndex;
             auto *net                            = Framework::CoreModules::GetNetworkPeer();
-            Shared::Entities::HumanEntity *mover = Player::Players::Find(match->players[seat]);
+            Shared::Entities::HumanEntity *mover = Player::Players::Find(moverId);
             if (net != nullptr && mover != nullptr) {
                 net->SendRPC(refuse, MafiaNet::ToGuid(mover->ownerGUID), MafiaNet::Priority::High, MafiaNet::Reliability::ReliableOrdered);
             }
-            return;
+        }
+    }
+
+    bool DiceService::Commit(Match &match, std::uint8_t seat, Shared::Game::Dice::MoveKind kind, std::uint8_t heldMask) {
+        const bool due       = seat == match.table.Turn() && !match.table.ThrowNeeded();
+        const auto turnScore = match.table.TurnScore();
+        const auto scored    = due ? match.table.Move(kind, heldMask) : std::nullopt;
+        if (!scored.has_value()) {
+            return false;
         }
 
         Shared::RPC::DiceCommit commit;
-        commit.matchId   = match->matchId;
-        commit.moveIndex = match->moves++;
+        commit.matchId   = match.matchId;
+        commit.moveIndex = match.moves++;
         commit.seat      = seat;
-        commit.kind      = move.kind;
-        commit.heldMask  = move.heldMask;
-        QueueProgress(*match, "diceMove", seat, kind == Shared::Game::Dice::MoveKind::Continue ? "continue" : "pass", *scored, move.heldMask, 0, turnScore + *scored);
+        commit.kind      = static_cast<std::uint8_t>(kind);
+        commit.heldMask  = heldMask;
+        QueueProgress(match, "diceMove", seat, kind == Shared::Game::Dice::MoveKind::Continue ? "continue" : "pass", *scored, heldMask, 0, turnScore + *scored);
         if (kind == Shared::Game::Dice::MoveKind::Pass) {
-            QueueProgress(*match, "diceTurnEnd", seat, match->table.Over() ? "won" : "pass", turnScore + *scored, move.heldMask, 0, turnScore + *scored);
-            match->turnOpen = false;
-            if (!match->table.Over()) {
-                ++match->turn;
-                match->roll     = 0;
-                match->turnOpen = true;
-                QueueProgress(*match, "diceTurnStart", match->table.Turn());
+            QueueProgress(match, "diceTurnEnd", seat, match.table.Over() ? "won" : "pass", turnScore + *scored, heldMask, 0, turnScore + *scored);
+            match.turnOpen = false;
+            if (!match.table.Over()) {
+                ++match.turn;
+                match.roll     = 0;
+                match.turnOpen = true;
+                QueueProgress(match, "diceTurnStart", match.table.Turn());
             }
         }
-        commit.deals     = DealPending(*match);
-        commit.total0    = match->table.Total(0);
-        commit.total1    = match->table.Total(1);
-        match->deadline  = Now() + kTurnTimeoutMs;
-        SendToSeats(*match, commit);
-        PublishProgress(*match);
+        commit.deals   = DealPending(match);
+        commit.total0  = match.table.Total(0);
+        commit.total1  = match.table.Total(1);
+        match.deadline = Now() + kTurnTimeoutMs;
+        SendToSeats(match, commit);
+        PublishProgress(match);
 
-        if (match->table.Over()) {
-            End(match->matchId, Shared::Game::Dice::EndReason::Won, match->table.Winner());
+        if (match.table.Over()) {
+            End(match.matchId, Shared::Game::Dice::EndReason::Won, match.table.Winner());
         }
         // A run of busts longer than one message carries: nothing either
         // client could play next, so nobody wins it.
-        else if (match->table.ThrowNeeded()) {
-            End(match->matchId, Shared::Game::Dice::EndReason::Failed, Shared::Game::Dice::kNoSeat);
+        else if (match.table.ThrowNeeded()) {
+            End(match.matchId, Shared::Game::Dice::EndReason::Failed, Shared::Game::Dice::kNoSeat);
         }
+        // A handler may move the NPC seat from here; `match` is not read again.
         FlushEvents();
+        return true;
     }
 
     void DiceService::OnLeave(const Shared::RPC::DiceLeave &leave, MafiaNet::Packet *packet) {

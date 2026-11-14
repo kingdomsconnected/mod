@@ -794,6 +794,10 @@ namespace KCDC::Features::Player {
         // cart, in the saddle, on a seat or leaning out -- to be cleared once
         // none holds it.
         bool _lookTargetApplied = false;
+
+        // Whether the owner's look has left their body's facing: an owner
+        // orbiting their third-person camera (see ApplyPose's look).
+        bool _lookAside = false;
         // The head's look target, eased toward the owner's look (PresentRemoteState).
         glm::vec3 _easedLook {0.0F};
         std::uint64_t _easedLookAt = 0;

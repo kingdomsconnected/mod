@@ -252,6 +252,144 @@ MODULE(world_objects, {
         }
     });
 
+    IT("places a smart object bare, without its furniture, where its blueprint has some to leave out", {
+        KCDC::Shared::Game::SmartObjectDefinition object;
+        std::string error;
+
+        // Left out or false, it is furnished, and its entry is written as it always was.
+        EQUALS(KCDC::Shared::Game::SmartObjectDefinitionFromJson({{"blueprint", "Bench/bench_2places_low"}, {"position", {1, 2, 3}}}, object, error), true);
+        EQUALS(object.bare, false);
+        EQUALS(KCDC::Shared::Game::SmartObjectDefinitionToJson(object).contains("bare"), false);
+        EQUALS(KCDC::Shared::Game::SmartObjectDefinitionFromJson({{"blueprint", "Bench/bench_2places_low"}, {"position", {1, 2, 3}}, {"bare", false}}, object, error), true);
+        EQUALS(object.bare, false);
+        EQUALS(KCDC::Shared::Game::SmartObjectDefinitionToJson(object).contains("bare"), false);
+
+        // Set, it goes out and comes back with the rest of the entry.
+        EQUALS(KCDC::Shared::Game::SmartObjectDefinitionFromJson({{"blueprint", "bench/BENCH_2PLACES_LOW"}, {"position", {1, 2, 3}}, {"name", "wall seat"}, {"bare", true}}, object, error), true);
+        EQUALS(object.bare, true);
+        const nlohmann::json written = KCDC::Shared::Game::SmartObjectDefinitionToJson(object);
+        EQUALS(written.at("bare"), nlohmann::json(true));
+        KCDC::Shared::Game::SmartObjectDefinition again;
+        EQUALS(KCDC::Shared::Game::SmartObjectDefinitionFromJson(written, again, error), true);
+        EQUALS(again.bare, true);
+        EQUALS(again.name, std::string("wall seat"));
+        EQUALS(again.blueprint, std::string("Bench/bench_2places_low"));
+
+        // Anything but a boolean is a mistake worth naming, never a guess at what was meant.
+        for (const nlohmann::json &mistyped : {nlohmann::json(1), nlohmann::json(0), nlohmann::json("true"), nlohmann::json(nullptr), nlohmann::json::array(), nlohmann::json::object()}) {
+            nlohmann::json entry {{"blueprint", "Bench/bench_2places_low"}, {"position", {1, 2, 3}}};
+            entry["bare"] = mistyped;
+            EQUALS(KCDC::Shared::Game::SmartObjectDefinitionFromJson(entry, object, error), false);
+            EQUALS(error, std::string("bare must be true or false"));
+        }
+
+        // Only a blueprint with static furniture has any to leave out: a chair's seat is an entity of its own, and the smokehouse has none.
+        std::set<std::string> refused;
+        for (const KCDC::Shared::Game::SmartObjectBlueprint &blueprint : KCDC::Shared::Game::g_SmartObjectBlueprints) {
+            const nlohmann::json entry {{"blueprint", std::string(blueprint.name)}, {"position", {1, 2, 3}}, {"bare", true}};
+            const bool accepted = KCDC::Shared::Game::SmartObjectDefinitionFromJson(entry, object, error);
+            EQUALS(accepted, KCDC::Shared::Game::SmartObjectStandsBare(blueprint));
+            if (!accepted) {
+                EQUALS(error.find("cannot stand bare") != std::string::npos, true);
+                refused.insert(std::string(blueprint.name));
+            }
+        }
+        EQUALS(refused, (std::set<std::string> {"Chair/chair_high", "Chair/chair_low", "profession/butcher/butcher_smokeHouse"}));
+        EQUALS(KCDC::Shared::Game::SmartObjectDefinitionFromJson({{"blueprint", "Chair/chair_low"}, {"position", {1, 2, 3}}, {"bare", false}}, object, error), true);
+
+        // The client builds from the construction, so the flag is on the wire.
+        for (const bool bare : {true, false}) {
+            KCDC::Shared::Entities::SmartObjectEntity sent;
+            sent.blueprint = 9;
+            sent.serial    = 7;
+            sent.bare      = bare;
+            sent.position  = glm::vec3(1.5F, 2.5F, 3.5F);
+            MafiaNet::BitStream stream;
+            Framework::Networking::Replication::FieldSerializer writer(&stream, true);
+            sent.OnSerializeConstruction(writer);
+            KCDC::Shared::Entities::SmartObjectEntity received;
+            received.bare = !bare;
+            Framework::Networking::Replication::FieldSerializer reader(&stream, false);
+            received.OnSerializeConstruction(reader);
+            EQUALS(reader.Good(), true);
+            EQUALS(received.bare, bare);
+            EQUALS(received.serial, std::uint32_t {7});
+            EQUALS(received.position.z, 3.5F);
+        }
+
+        // A map carries it to the export and to the API calls, and a bad one fails the map by its entry.
+        nlohmann::json map {{"format", KCDC::Shared::WorldBuilder::kResourceFormat}, {"version", 2}, {"level", "kutnohorsko"}, {"objects", nlohmann::json::array()}, {"effects", nlohmann::json::array()}, {"world", nlohmann::json::array()}, {"areas", nlohmann::json::array()}};
+        map["smartObjects"] = nlohmann::json::array({{{"blueprint", "Bench/bench_2places_low"}, {"position", {4, 5, 6}}, {"rotation", {0, 0, 0, 1}}, {"bare", true}, {"group", "g"}, {"layer", "l"}}});
+        EQUALS(KCDC::Shared::WorldBuilder::ValidateContent(map, error), true);
+        const nlohmann::json resource = KCDC::Shared::WorldBuilder::ExportResource(map);
+        EQUALS(resource.at("smartObjects")[0].at("bare"), nlohmann::json(true));
+        EQUALS(resource.at("smartObjects")[0].contains("group"), false);
+        EQUALS(KCDC::Shared::WorldBuilder::ApiCalls(resource).find("\"bare\":true") != std::string::npos, true);
+        map["smartObjects"][0]["bare"] = "yes";
+        EQUALS(KCDC::Shared::WorldBuilder::ValidateContent(map, error), false);
+        EQUALS(error.find("smartObjects[0]") != std::string::npos, true);
+        EQUALS(error.find("bare must be true or false") != std::string::npos, true);
+        map["smartObjects"][0]["bare"]      = true;
+        map["smartObjects"][0]["blueprint"] = "Chair/chair_low";
+        EQUALS(KCDC::Shared::WorldBuilder::ValidateContent(map, error), false);
+        EQUALS(error.find("cannot stand bare") != std::string::npos, true);
+    });
+
+    IT("keeps bare among a placed smart object's settings, as the editor's checkbox and its MCP tool write it", {
+        std::string error;
+        std::string model       = "bench/BENCH_2PLACES_LOW";
+        nlohmann::json settings = {{"name", "wall seat"}, {"bare", true}};
+        EQUALS(KCDC::Features::Prop::NormalizeWorldObject(KCDC::Features::Prop::PlacedKind::SmartObject, model, settings, error), true);
+        EQUALS(model, std::string("Bench/bench_2places_low"));
+        EQUALS(settings, (nlohmann::json {{"name", "wall seat"}, {"bare", true}}));
+        EQUALS(KCDC::Features::Prop::WorldObjectStandsBare(settings), true);
+
+        // Unticked is the default, so it is not stored: an untouched bench's settings stay empty.
+        settings = {{"bare", false}};
+        EQUALS(KCDC::Features::Prop::NormalizeWorldObject(KCDC::Features::Prop::PlacedKind::SmartObject, model, settings, error), true);
+        EQUALS(settings, nlohmann::json::object());
+        EQUALS(KCDC::Features::Prop::WorldObjectStandsBare(settings), false);
+        EQUALS(KCDC::Features::Prop::WorldObjectStandsBare(nlohmann::json()), false);
+        EQUALS(KCDC::Features::Prop::WorldObjectStandsBare(nlohmann::json {{"bare", "true"}}), false);
+
+        settings = {{"bare", "yes"}};
+        EQUALS(KCDC::Features::Prop::NormalizeWorldObject(KCDC::Features::Prop::PlacedKind::SmartObject, model, settings, error), false);
+        EQUALS(error, std::string("bare must be true or false"));
+
+        // The checkbox is offered where the blueprint takes it, and the settings refuse it where it does not.
+        EQUALS(KCDC::Features::Prop::WorldObjectTakesBare(KCDC::Features::Prop::PlacedKind::SmartObject, "Bench/bench_2places_low"), true);
+        EQUALS(KCDC::Features::Prop::WorldObjectTakesBare(KCDC::Features::Prop::PlacedKind::SmartObject, "Chair/chair_low"), false);
+        EQUALS(KCDC::Features::Prop::WorldObjectTakesBare(KCDC::Features::Prop::PlacedKind::SmartObject, "Bench/bench_nope"), false);
+        EQUALS(KCDC::Features::Prop::WorldObjectTakesBare(KCDC::Features::Prop::PlacedKind::Door, "Bench/bench_2places_low"), false);
+        model    = "Chair/chair_low";
+        settings = {{"bare", true}};
+        EQUALS(KCDC::Features::Prop::NormalizeWorldObject(KCDC::Features::Prop::PlacedKind::SmartObject, model, settings, error), false);
+        EQUALS(error.find("cannot stand bare") != std::string::npos, true);
+
+        // A door has no such setting: the field is not its own, so it is dropped rather than kept.
+        model    = "lvl1_door_a_left";
+        settings = {{"bare", true}};
+        EQUALS(KCDC::Features::Prop::NormalizeWorldObject(KCDC::Features::Prop::PlacedKind::Door, model, settings, error), true);
+        EQUALS(settings.contains("bare"), false);
+
+        // Saved in the project and the map, and read back as it was written.
+        KCDC::Features::Prop::MapDocument document;
+        document.level = "kutnohorsko";
+        KCDC::Features::Prop::DocumentObject seat;
+        seat.kind     = KCDC::Features::Prop::PlacedKind::SmartObject;
+        seat.model    = "Bench/bench_2places_low";
+        seat.settings = {{"bare", true}};
+        seat.position = {5, 6, 7};
+        document.objects.push_back(seat);
+        const nlohmann::json scene = KCDC::Features::Prop::MapDocumentToJson(document);
+        EQUALS(scene.at("smartObjects")[0].at("bare"), nlohmann::json(true));
+        EQUALS(KCDC::Shared::WorldBuilder::ValidateContent(scene, error), true);
+        KCDC::Features::Prop::MapDocument restored;
+        EQUALS(KCDC::Features::Prop::ParseProject(KCDC::Features::Prop::ProjectToJson(document).dump(), restored, error), true);
+        EQUALS(restored.objects.size(), std::size_t {1});
+        EQUALS(restored.objects[0].settings, seat.settings);
+    });
+
     IT("validates and exports doors, smart objects and items, and copies them as API calls", {
         nlohmann::json map {{"format", KCDC::Shared::WorldBuilder::kResourceFormat}, {"version", 2}, {"level", "kutnohorsko"}, {"objects", nlohmann::json::array()}, {"effects", nlohmann::json::array()}, {"world", nlohmann::json::array()}, {"areas", nlohmann::json::array()}};
         std::string error;

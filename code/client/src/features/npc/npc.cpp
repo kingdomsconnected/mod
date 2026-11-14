@@ -1,6 +1,7 @@
 #include "features/npc/npc.h"
 
 #include "core/obfuscation.h"
+#include "features/dice/dice_module.h"
 #include "features/npc/npc_inventory_module.h"
 #include "features/npc/npc_locomotion_service.h"
 #include "features/npc/npc_service.h"
@@ -313,6 +314,15 @@ namespace KCDC::Features::Npc {
             return;
         }
 
+        // A dice table holding this body as its opponent seats and animates
+        // it, as it does a player's copy: neither role places or steers it
+        // meanwhile, and the pose on the wire stays where it stood.
+        if (KCDC::Features::Dice::DiceModule::Get().HoldsBody(_entityId)) {
+            ReleaseSteering(actor);
+            WithdrawLocomotion();
+            return;
+        }
+
         if (IsSimulating()) {
             // Nothing is forced here. `C_ActorMovementController::Update`
             // (0x1804B8E88) derives the desired velocity from the move target
@@ -522,6 +532,10 @@ namespace KCDC::Features::Npc {
         // through: the body has to be stood down and, if it is the level's, handed
         // back, and after the unbind there is nothing left to do either with.
         SDK::wh::entitymodule::C_Actor *actor = ResolveActor();
+
+        // A dice table that holds this body as its opponent is closed while
+        // the actor is still here.
+        KCDC::Features::Dice::DiceModule::Get().ForgetBody(entityId);
 
         // A corpse is stood up before it is retired; see `PrepareForRemoval`.
         // This is the same crash a respawn once caused on every observer.

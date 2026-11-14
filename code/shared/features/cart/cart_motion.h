@@ -45,6 +45,18 @@ namespace KCDC::Shared::Game {
     inline constexpr float kCartSteerSpeed = 5.0F;
 
     /**
+     * Backing up, the reins do not swing the lead round as they do going
+     * forward: a cart pushed backwards folds on its own, faster than a
+     * wheelbase-paced swing can straighten it, and a two-wheeler at its
+     * shaft lock never comes back. They set the angle the team holds the
+     * lead at instead -- this share of the lock, to the side the driver
+     * wants the back of the cart to go -- and the team swings to it this
+     * many radians a second, faster than the fold.
+     */
+    inline constexpr float kCartReverseLockShare = 0.8F;
+    inline constexpr float kCartReverseSteerRate = 1.5F;
+
+    /**
      * How hard a cart gets under way, how hard it slows to stop or turn
      * round, and how hard a cart backing up pulls away forward again, in
      * metres a second per second.
@@ -267,11 +279,14 @@ namespace KCDC::Shared::Game {
      * One step of a cart under `controls`.
      *
      * The speed eases to what the controls ask, and stops dead when
-     * `blocked`. The reins swing the lead point while the cart rolls -- the
-     * way it rolls, so backing up with the reins left backs the wagon round
-     * to the left -- never standing: a team does not turn a wagon on the
-     * spot. The lead point rolls along its heading; the trailing axle follows
-     * it at `wheelbase` along the line between them, which is what turns the
+     * `blocked`. Going forward the reins swing the lead point round while
+     * the cart rolls, never standing: a team does not turn a wagon on the
+     * spot. Backing up they hold the lead at an angle to the body instead
+     * (`kCartReverseLockShare`), so the reins left send the back of the cart
+     * to the driver's left, the reins right to the right, and none back it
+     * straight -- the same both ways, whichever way it was folded before.
+     * The lead point rolls along its heading; the trailing axle follows it
+     * at `wheelbase` along the line between them, which is what turns the
      * body.
      */
     inline CartDrive StepCart(const CartDrive &from, const CartControls &controls, const CartGaits &gaits, float wheelbase, bool articulated, bool blocked, float dt) {
@@ -288,11 +303,18 @@ namespace KCDC::Shared::Game {
             to.speed = std::max(target, to.speed - (to.speed > 0.0F && target <= 0.0F ? kCartBraking : kCartAcceleration) * dt);
         }
 
-        if (std::fabs(to.speed) > kCartStandSpeed) {
-            const float rate = std::min(1.0F, std::fabs(to.speed) / kCartSteerSpeed) * (to.speed > 0.0F ? 1.0F : -1.0F);
-            to.leadYaw += std::clamp(controls.steer, -1.0F, 1.0F) * rate * dt;
+        const float lock  = articulated ? kCartMaxLock : kCartMaxShaftLock;
+        const float steer = std::clamp(controls.steer, -1.0F, 1.0F);
+        if (to.speed > kCartStandSpeed) {
+            to.leadYaw += steer * std::min(1.0F, to.speed / kCartSteerSpeed) * dt;
         }
-        const float lock = articulated ? kCartMaxLock : kCartMaxShaftLock;
+        else if (to.speed < -kCartStandSpeed) {
+            // A lead turned left of the body pushes the back of the cart out to the left.
+            const float angle  = CartWrapAngle(to.leadYaw - to.bodyYaw);
+            const float wanted = steer * lock * kCartReverseLockShare;
+            const float swing  = kCartReverseSteerRate * dt;
+            to.leadYaw         = to.bodyYaw + angle + std::clamp(wanted - angle, -swing, swing);
+        }
         to.leadYaw       = to.bodyYaw + std::clamp(CartWrapAngle(to.leadYaw - to.bodyYaw), -lock, lock);
 
         const glm::vec2 lead = glm::vec2(from.lead) + CartHeading(to.leadYaw) * (to.speed * dt);

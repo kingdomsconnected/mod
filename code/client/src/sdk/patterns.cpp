@@ -326,6 +326,10 @@ namespace SDK {
         // operations make this RIP-relative load unique in WHGame.dll.
         gPatterns.I3DEngine__Instance = hook::get_address<std::uint64_t>(hook::get_pattern(KCDC_HIDE("48 8B 0D ? ? ? ? 0F 28 DA F3 0F 59 C2 F3 44 0F 59 C5 48 8B 01")), 3, 7);
 
+        // C3DEngine::GetStatInstGroup (0x183493338) loads the object manager
+        // and bounds the group id against the table at +0x10/+0x18.
+        gPatterns.CObjManager__Instance = hook::get_address<std::uint64_t>(hook::get_pattern(KCDC_HIDE("48 8B 05 ? ? ? ? 4C 63 CA 4C 8B 40 10 48 8B 48 18")), 3, 7);
+
         // Takes the C_InventorySoul embedded at soul +0x198, asks it for its
         // inventory through its first virtual and builds the inventory and
         // equipment manager only when that answers null. The `lea` of the

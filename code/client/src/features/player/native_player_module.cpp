@@ -721,6 +721,23 @@ namespace KCDC::Features::Player {
         }
         mounts.Store(BodyKey(mount), kValueMountPace, 0);
         mounts.Store(BodyKey(mount), kValueMountSpeed, 0);
+        mounts.Store(BodyKey(mount), kValueMountSteer, 0);
+    }
+
+    void NativePlayerModule::SetMountSteer(const SDK::wh::entitymodule::C_Actor *mount, float stick) {
+        RemoteKeySet &mounts = Get()._remoteMounts;
+        if (!mounts.Contains(BodyKey(mount))) {
+            if (stick == 0.0F) {
+                return;
+            }
+            mounts.Insert(BodyKey(mount));
+        }
+        mounts.Store(BodyKey(mount), kValueMountSteer, stick == 0.0F ? 0 : kMountValueSet | std::bit_cast<std::uint32_t>(stick));
+    }
+
+    float NativePlayerModule::MountSteer(const SDK::wh::entitymodule::C_Actor *mount) {
+        const std::uint64_t stored = mount != nullptr ? Get()._remoteMounts.Read(BodyKey(mount), kValueMountSteer) : 0;
+        return (stored & kMountValueSet) != 0 ? std::bit_cast<float>(static_cast<std::uint32_t>(stored)) : 0.0F;
     }
 
     bool NativePlayerModule::MountPace(const SDK::wh::entitymodule::C_Actor *mount, float &pace) {
